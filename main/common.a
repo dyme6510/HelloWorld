@@ -1,0 +1,191 @@
+!src <6502/opcodes.a>
+!src <6502/std.a>
+!src <cbm/c64/cia1.a>
+!src <cbm/c64/cia2.a>
+!src <cbm/c64/vic.a>
+!src "../main/common_macros.a"
+!cpu 6510
+	
+DEMO_COMMAND_FLAG = $0FFF ; immediately before music
+cDC_WAIT 			= 0
+cDC_RUN_0400 		= 1
+cDC_UNPACK_NEXT		= 2
+cDC_RUN_NEXT 		= 3
+
+
+PART_SCREENDROP_BASE = $E000
+PART_SCROLLER_BASE = $B000
+PART_PICSCROLL_BASE = $3800
+PART_FIREBLUR_BASE = $8000
+
+!if (STANDALONE != 0) {
+	*= $801
+	!word (+), 10
+	!text $9e, "2061", 0
++ 	!word 0
+
+    sei
+	lda #$35
+ 	sta $01			; Turn off basic+kernal ROM
+
+	lda #$7f
+	sta cia1_icr	; Turn off CIA 1 interrupts
+	sta cia2_icr	; Turn off CIA 2 interrupts
+	lda cia1_icr	; Clear CIA 1 interrupts
+	lda cia2_icr	; Clear CIA 2 interrupts
+
+	lda #$00
+	sta vic_irqmask	; Turn off all VIC interrupts
+	
+  	lda #<.emptyNMI ; disable nmi
+  	sta cpu_nmi
+  	sta cpu_irq
+  	lda #>.emptyNMI
+  	sta cpu_nmi+1
+  	sta cpu_irq+1
+
+	lda $dc0d    	; ACK CIA 1 interrupts
+	lda $dd0d    	; ACK CIA 2 interrupts
+	asl $d019    	; ACK VIC interrupts
+	cli
+
+!if (STANDALONE = 2){
+	jmp .MODULE_EXPL_START
+}else{
+	jmp .MODULE_WRAPPER_START
+}	
+	
+;; TOOLBOX:
+ClearPagesX2Y:
+	lda #0
+InitPagesX2Y:
+    iny
+	stx .InitXPagesSta + 2
+	ldx #0
+.InitXPagesSta:
+	sta $0000,x
+	inx
+	bne .InitXPagesSta
+	inc .InitXPagesSta + 2
+	cpy .InitXPagesSta + 2
+	bne .InitXPagesSta
+	rts
+
+CopyTo0400:
+	stx .CopyTo0400CompareLo+1
+	sty .CopyTo0400CompareHi+1
+	lda #$04
+	sta .CopyTo0400DstAddr+2
+	ldx #0
+	ldy #0
+CopyTo0400SrcAddr:
+	lda $0000,x
+.CopyTo0400DstAddr:
+	sta $0000,x
+.CopyTo0400CompareLo:
+	cpx #0
+	bne +
+.CopyTo0400CompareHi:
+	cpy #0
+	bne +
+	rts
++	inx
+	bne CopyTo0400SrcAddr
+    inc CopyTo0400SrcAddr + 2
+    inc .CopyTo0400DstAddr + 2
+	iny
+	bne CopyTo0400SrcAddr ; always taken
+	
+.PlayMusicIrq:
+	pha : txa : pha : tya : pha ; Save Registers on stack
+    lda $01
+    sta .vPlayMusicIrqSave01
+	lda #$35
+ 	sta $01			; Turn off basic+kernal ROM, but keep I/O
+	jsr $1003    
+    pla : tay : pla : tax
+.vPlayMusicIrqSave01 = *+1    
+    lda #00
+	asl vic_irq			; enable next interrupt	    
+    sta $01
+    pla
+    rti
+    
+ReturnFromVicIrq:
+	pla : tay : pla : tax : pla ; restore all registers
+	asl vic_irq			; enable next interrupt	
+.emptyNMI:
+	rti
+	
+JustMusicIrq:
+  	lda #<.PlayMusicIrq
+  	sta cpu_irq
+  	lda #>.PlayMusicIrq
+  	sta cpu_irq+1
+
+	lda vic_controlv
+    and #$78
+	sta vic_controlv
+	lda #0
+	sta vic_line
+    rts	
+	
+	
+} else {
+ClearPagesX2Y = $0842
+InitPagesX2Y = $0844
+CopyTo0400 = $0859
+CopyTo0400SrcAddr = $0868
+ReturnFromVicIrq = $08A1
+JustMusicIrq = $08AA
+}
+
+!macro CopyTransitionPart .StartAddr, .EndAddr {
+	lda #<.StartAddr
+	sta CopyTo0400SrcAddr+1
+	lda #>.StartAddr
+	sta CopyTo0400SrcAddr+2
+	ldy #>((.EndAddr-1) - .StartAddr)
+	ldx #<((.EndAddr-1) - .StartAddr)
+	jsr CopyTo0400	
+}
+
+
+
+
+!if (STANDALONE = 1){
+.MODULE_WRAPPER_START:
+	jsr .MODULE_EXPL_START
+-	nop
+	jmp -
+}
+
+!if (MODULE_START != 0){
+	* = MODULE_START
+}
+.MODULE_EXPL_START:
+
+.LOG_SYMBOLS = 1
+!if ((STANDALONE != 0) & .LOG_SYMBOLS){
+	!warn "ClearPagesX2Y: ", ClearPagesX2Y
+	!warn "InitPagesX2Y: ", InitPagesX2Y
+	!warn "CopyTo0400: ", CopyTo0400
+	!warn "CopyTo0400SrcAddr: ", CopyTo0400SrcAddr	
+	!warn "ReturnFromVicIrq: ", ReturnFromVicIrq	
+	!warn "JustMusicIrq: ", JustMusicIrq	
+}
+
+!macro SignalRun0400 {
+	lda #cDC_RUN_0400
+	sta DEMO_COMMAND_FLAG
+}
+
+!macro SignalUnpackNextPart {
+	lda #cDC_UNPACK_NEXT
+	sta DEMO_COMMAND_FLAG
+}
+
+!macro SignalRunNextPart {
+	lda #cDC_RUN_NEXT
+	sta DEMO_COMMAND_FLAG
+}

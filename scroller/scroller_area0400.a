@@ -1,0 +1,14 @@
+
+!src "..\..\nd_proj\scroller\scroller_constants.a"
+
+!zone SCROLLER_AREA0400
+
+
+Area0400:
+!pseudopc $0400{
+
+	+SignalRunNextPart
+
+}
+AfterArea0400:
+!warn "Area0400 size: ", (AfterArea0400 - Area0400)	

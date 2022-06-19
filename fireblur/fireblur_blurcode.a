@@ -1,0 +1,399 @@
+; GFX-Mode: 4x4 (Chars w 4x4 colors, encoded %BRblTRtl), 00 is black, 11 is white
+
+!ZONE FIREBLUR_BLURCODE
+
+cCountFireRows = 25
+cCountFireColumns = 39
+cFire0x = 0
+cFire0y = 0
+
+
+; =========================================
+;           MACRO: BlurTilesRight
+; =========================================
+
+; First Column has to reset all .vSrcPrev
+; Call BlurTileRight From 0 to Columns
+!macro BlurTileRightMid .pSrc, .pDst{
+    ; First Calculate Bottom Next Tile
+    lax .pSrc,y                 ; 4
+    and #cMaskLeft              ; 2
+.vSrcPrev = *+1                         ; offset:+6
+    ora #0                      ; 2     
+    sta .vSrcResultPrev         ; 4
+    lda #cMaskRight             ; 2
+    sax .vSrcPrev               ; 4     Set .vSrcPrev for next Column
+    lda pBlurMaskRight,x        ; 4
+.vSrcResultPrev = *+1
+    ora pBlurMaskLeft           ; 4
+    sta .pDst,y                 ; 5     __31 / 24 bytes
+}
+cSrcOff = 6
+cTileCL = 24
+
+; First Column has to reset all .vSrcPrev
+; Call BlurTileRight From 0 to Columns
+!macro BlurTileRightFirst .pSrc, .pDst, .pSrcPrevAddr{
+    ; First Calculate Bottom Next Tile
+    lax .pSrc                   ; 4
+    and #cMaskLeft              ; 2
+    sta .vSrcResultPrev         ; 4
+    lda #cMaskRight             ; 2
+    sax .pSrcPrevAddr           ; 4     Set .vSrcPrev for next Column
+    lda pBlurMaskRight,x        ; 4
+.vSrcResultPrev = *+1
+    ora pBlurMaskLeft           ; 4
+    sta .pDst                   ; 4     __28
+}
+
+; First Column has to reset all .vSrcPrev
+; Call BlurTileRight From 0 to Columns
+!macro BlurTileRightLast .pSrc, .pDst, .pSrcPrevAddr{
+    ; First Calculate Bottom Next Tile
+    lax .pSrc+cCountFireColumns-1; 4
+    and #cMaskLeft              ; 2
+    ora .pSrcPrevAddr           ; 4     
+    sta .vSrcResultPrev         ; 4
+    lda pBlurMaskRight,x        ; 4
+.vSrcResultPrev = *+1
+    ora pBlurMaskLeft           ; 4
+    sta .pDst+cCountFireColumns-1; 4     __26
+}
+
+
+!macro BlurTilesRight .pSrcScreen, .pDstScreen{
+.pSrc = .pSrcScreen + cFire0x + (cFire0y*40)
+.pDst = .pDstScreen + cFire0x + (cFire0y*40)
+    !for .I, 0, cCountFireRows-1{
+        +BlurTileRightFirst .pSrc+(.I*40), .pDst+(.I*40), .ColumnCode+(.I*cTileCL)+cSrcOff
+    }
+    ldy #0
+.ColumnCode:
+    !for .I, 0, cCountFireRows-1{
+        +BlurTileRightMid .pSrc+(.I*40)+1, .pDst+(.I*40)+1
+    }
+    iny                         ; 2
+    cpy #cCountFireColumns-2
+    beq+                        ; 2/3
+    jmp .ColumnCode             ; 3
++
+    !for .I, 0, cCountFireRows-1{
+        +BlurTileRightLast .pSrc+(.I*40), .pDst+(.I*40), .ColumnCode+(.I*cTileCL)+cSrcOff
+    }
+}
+
+
+
+; =========================================
+;           MACRO: BlurTilesLeft
+; =========================================
+
+; First Column has to reset all .vSrcPrev
+; Call BlurTilesLeft From Columns to 0
+!macro BlurTileLeftMid .pSrc, .pDst{
+    ; First Calculate Bottom Next Tile
+    lax .pSrc,y                 ; 4
+    and #cMaskRight             ; 2
+.vSrcPrev = *+1                         ; offset:+6
+    ora #0                      ; 2     
+    sta .vSrcResultPrev         ; 4
+    lda #cMaskLeft              ; 2
+    sax .vSrcPrev               ; 4     Set .vSrcPrev for next Column
+    lda pBlurMaskLeft,x         ; 4
+.vSrcResultPrev = *+1
+    ora pBlurMaskRight          ; 4
+    sta .pDst,y                 ; 5     __31 / 24 bytes
+}
+
+; First Column has to reset all .vSrcPrev
+; Call BlurTilesLeft From Columns to 0
+!macro BlurTileLeftFirst .pSrc, .pDst, .pSrcPrevAddr{
+    ; First Calculate Bottom Next Tile
+    lax .pSrc+cCountFireColumns-1   ; 4
+    and #cMaskRight             ; 2
+    sta .vSrcResultPrev         ; 4
+    lda #cMaskLeft              ; 2
+    sax .pSrcPrevAddr           ; 4     Set .vSrcPrev for next Column
+    lda pBlurMaskLeft,x         ; 4
+.vSrcResultPrev = *+1
+    ora pBlurMaskRight          ; 4
+    sta .pDst+cCountFireColumns-1   ; 4     __28
+}
+
+; First Column has to reset all .vSrcPrev
+; Call BlurTilesLeft From Columns to 0
+!macro BlurTileLeftLast .pSrc, .pDst, .pSrcPrevAddr{
+    ; First Calculate Bottom Next Tile
+    lax .pSrc                   ; 4
+    and #cMaskRight             ; 2
+    ora .pSrcPrevAddr           ; 4     
+    sta .vSrcResultPrev         ; 4
+    lda pBlurMaskLeft,x         ; 4
+.vSrcResultPrev = *+1
+    ora pBlurMaskRight          ; 4
+    sta .pDst                   ; 4     __26
+}
+
+
+!macro BlurTilesLeft .pSrcScreen, .pDstScreen{
+.pSrc = .pSrcScreen + cFire0x + (cFire0y*40)
+.pDst = .pDstScreen + cFire0x + (cFire0y*40)
+    !for .I, 0, cCountFireRows-1{
+        +BlurTileLeftFirst .pSrc+(.I*40), .pDst+(.I*40), .ColumnCode+(.I*cTileCL)+cSrcOff
+    }
+    ldy #cCountFireColumns-2
+.ColumnCode:
+    !for .I, 0, cCountFireRows-1{
+        +BlurTileLeftMid .pSrc+(.I*40), .pDst+(.I*40)
+    }
+    dey                         ; 2
+    beq+                        ; 2/3
+    jmp .ColumnCode             ; 3
++
+    !for .I, 0, cCountFireRows-1{
+        +BlurTileLeftLast .pSrc+(.I*40), .pDst+(.I*40), .ColumnCode+(.I*cTileCL)+cSrcOff
+    }
+}
+
+
+; =========================================
+;           MACRO: BlurTilesUp
+; =========================================
+
+!macro BlurTileUpMid .pSrc, .pDst{
+    lax .pSrc,y                 ; 4
+    and #cMaskBottom            ; 2
+.vSrcPrev = *+1
+    ora #0                      ; 2
+    sta .vSrcResultPrev         ; 4
+    lda #cMaskTop               ; 2
+    sax .vSrcPrev + cTileCL     ; 4   Set .vSrcPrev for next Row
+    lda pBlurMaskTop,x          ; 4
+.vSrcResultPrev = *+1
+    ora pBlurMaskBottom         ; 4
+    sta .pDst,y                 ; 5     __31
+}
+
+; Call from bottom up
+!macro BlurTilesUp .pSrcScreen, .pDstScreen{
+.pSrc = .pSrcScreen + cFire0x + (cFire0y*40)
+.pDst = .pDstScreen + cFire0x + (cFire0y*40)
+
+    ldy #cCountFireColumns
+.loopColumn:
+    lax .pSrc + ((cCountFireRows-1) * 40),y                 ; 4
+    and #cMaskBottom            ; 2
+    sta .vSrcResultPrev         ; 4
+    lda #cMaskTop               ; 2
+    sax .cStartNextTile + cSrcOff ; 4   Set .vSrcPrev for next Row
+    lda pBlurMaskTop,x      ; 4
+.vSrcResultPrev = *+1
+    ora pBlurMaskBottom           ; 4
+    sta .pDst + ((cCountFireRows-1) * 40),y                 ; 5     __29
+
+.cStartNextTile:
+    !for .cRow, cCountFireRows-2, 1{
+        +BlurTileUpMid .pSrc+(.cRow * 40), .pDst+(.cRow * 40)
+    }
+
+    lax .pSrc,y                 ; 4
+    and #cMaskBottom            ; 2
+.vSrcPrevLast = *+1
+    ora #0                      ; 2
+    sta .vLastResult            ; 4
+    lda pBlurMaskTop,x       ; 4
+.vLastResult = *+1
+    ora pBlurMaskBottom            ; 4
+    sta .pDst,y                 ; 5     __25  ___ Rows*31 - 8
+
+    dey                         ; 2
+    beq+                        ; 2/3
+    jmp .loopColumn             ; 3
++
+}
+
+
+; =========================================
+;           MACRO: BlurTilesDown
+; =========================================
+
+!macro BlurTileDownMid .pSrc, .pDst{
+    lax .pSrc,y                 ; 4
+    and #cMaskTop              ; 2
+.vSrcPrev = *+1
+    ora #0                      ; 2
+    sta .vSrcResultPrev         ; 4
+    lda #cMaskBottom            ; 2
+    sax .vSrcPrev + cTileCL     ; 4   Set .vSrcPrev for next Row
+    lda pBlurMaskBottom,x          ; 4
+.vSrcResultPrev = *+1
+    ora pBlurMaskTop         ; 4
+    sta .pDst,y                 ; 5     __31
+}
+
+; Call from bottom up
+!macro BlurTilesDown .pSrcScreen, .pDstScreen, .cSkipLastSrc{
+.pSrc = .pSrcScreen + cFire0x + (cFire0y*40)
+.pDst = .pDstScreen + cFire0x + (cFire0y*40)
+
+    ldy #cCountFireColumns
+.loopColumn:
+    lax .pSrc,y                 ; 4
+    and #cMaskTop               ; 2
+    sta .vSrcResultPrev         ; 4
+    lda #cMaskBottom            ; 2
+    sax .cStartNextTile + cSrcOff ; 4   Set .vSrcPrev for next Row
+    lda pBlurMaskBottom,x          ; 4
+.vSrcResultPrev = *+1
+    ora pBlurMaskTop         ; 4
+    sta .pDst,y                 ; 5     __29
+
+.cStartNextTile:
+    !for .cRow, 1, cCountFireRows-2{
+        +BlurTileDownMid .pSrc+(.cRow * 40), .pDst+(.cRow * 40)
+    }
+
+    lax .pSrc + ((cCountFireRows-1) * 40),y                 ; 4
+    and #cMaskTop               ; 2
+.vSrcPrevLast = *+1
+    ora #0                      ; 2
+    sta .vLastResult            ; 4
+    lda pBlurMaskBottom,x       ; 4
+.vLastResult = *+1
+    ora pBlurMaskTop            ; 4
+    sta .pDst + ((cCountFireRows-1) * 40),y                 ; 5     __25  ___ Rows*31 - 8
+
+    dey                         ; 2
+    beq+                        ; 2/3
+    jmp .loopColumn             ; 3
++
+}
+
+
+
+
+; =========================================
+;           MACRO: BlurTilesScrollUp (blurTilesDown mit +1Char Y offset)
+; =========================================
+
+!macro BlurTileScrollUpMid .pSrc, .pDst{
+    lax .pSrc+40,y              ; 4
+    and #cMaskTop               ; 2
+.vSrcPrev = *+1
+    ora #0                      ; 2
+    sta .vSrcResultPrev         ; 4
+    lda #cMaskBottom            ; 2
+    sax .vSrcPrev + cTileCL     ; 4   Set .vSrcPrev for next Row
+    lda pBlurMaskBottom,x       ; 4
+.vSrcResultPrev = *+1
+    ora pBlurMaskTop            ; 4
+    sta .pDst,y                 ; 5     __31
+}
+
+; Call from bottom up
+!macro BlurTilesScrollUp .pSrcScreen, .pDstScreen{
+.pSrc = .pSrcScreen + cFire0x + (cFire0y*40) +40
+.pDst = .pDstScreen + cFire0x + (cFire0y*40)
+
+    ldy #cCountFireColumns-1
+.loopColumn:
+    lax .pSrc,y                 ; 4
+    and #cMaskTop               ; 2
+    sta .vSrcResultPrev         ; 4
+    lda #cMaskBottom            ; 2
+    sax .cStartNextTile + cSrcOff ; 4   Set .vSrcPrev for next Row
+    lda pBlurMaskBottom,x       ; 4
+.vSrcResultPrev = *+1
+    ora pBlurMaskTop            ; 4
+    sta .pDst,y                 ; 5     __29
+
+.cStartNextTile:
+    !for .cRow, 1, cCountFireRows-3{
+        +BlurTileDownMid .pSrc+(.cRow * 40), .pDst+(.cRow * 40)
+    }
+
+    lax .pSrc + ((cCountFireRows-2) * 40),y                 ; 4
+    and #cMaskTop               ; 2
+.vSrcPrevPenultimate = *+1
+    ora #0                      ; 2
+    sta .vSrcResultPrev         ; 4
+    lda #cMaskBottom            ; 2
+    sax .vLastResult            ; 4   Set .vSrcPrev for next Row
+    lda pBlurMaskBottom,x       ; 4
+.vPenultimateResult = *+1
+    ora pBlurMaskTop            ; 4
+    sta .pDst + ((cCountFireRows-2) * 40),y
+    
+    lda pBlurMaskBottom,x       ; 4
+.vLastResult = *+1
+    ora pBlurMaskTop            ; 4
+    sta .pDst + ((cCountFireRows-1) * 40),y                 ; 5     __25  ___ Rows*31 - 8
+
+    dey                         ; 2
+    bmi +                       ; 2/3
+    jmp .loopColumn             ; 3
++
+}
+
+
+
+BlurMainLoop:
+    lda #0
+    sta .vActiveBlurScreen
+-   cmp vScreenBlurCalc    
+    bne -    
+    +BlurTilesScrollUp pcTextPage3, pcTextPage0
+    jsr .AfterBlur
+    inc .vActiveBlurScreen    
+    +BlurTilesLeft pcTextPage0, pcTextPage1
+    jsr .AfterBlur
+    inc .vActiveBlurScreen    
+    +BlurTilesScrollUp pcTextPage1, pcTextPage2
+    jsr .AfterBlur
+    inc .vActiveBlurScreen    
+    +BlurTilesRight pcTextPage2, pcTextPage3
+    jsr .AfterBlur
+    
+    lda vExitBlurLoop
+    bne +
+    jmp BlurMainLoop  
++   rts
+
+
+.vAnimationSpriteFrame: !byte 0
+
+.AfterBlur:
+    jsr AnimateAllSprites
+    
+    ldx .vActiveBlurScreen    
+    jsr BlitSpriteInitFrame
+;    jsr DecayFire
+    ldx .vLastBlitSpriteIndex    
+.BlitSpriteFireLoop:
+.vActiveBlurScreen = *+1
+    lda #0
+    cmp vScreenBlurCalc
+    beq +
+    stx .vLastFrameSpriteIndex    
+    rts    
++   inx
+    cpx #cMaxSprite
+    bne +
+    ldx #0
++   stx .vLastBlitSpriteIndex
+    txa
+    ora zvScreenBlitSpriteFrame
+    tax
+    jsr BlitSpriteFire
+.vLastBlitSpriteIndex = *+1
+    ldx #0
+.vLastFrameSpriteIndex = *+1
+    cpx #0
+    bne .BlitSpriteFireLoop
+
+.WaitForNextFrame:
+    lda .vActiveBlurScreen
+-   cmp vScreenBlurCalc    
+    beq -
+    rts
+

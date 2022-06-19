@@ -1,0 +1,373 @@
+
+;
+; Der Multiplexer soll mit Y-Exp Sprites zurechtkommen
+;
+
+!ZONE FIREBLUR_SPRITEMULTIPLEX
+
+;; incremental sort from previous, already sorted list:
+    
+.cAfterSpriteSafetyLines = 2
+cSpriteHwBlockLenExp = 42 + .cAfterSpriteSafetyLines   
+cSpriteHwBlockLen = 21 + .cAfterSpriteSafetyLines
+
+
+InitSpriteMultiplexer:
+    lda #0
+    sta zvNextInsertSprite
+    ldx #cMaxSprite-1
+    stx zvNextUnusedSprite
+-   txa
+    sta pUnusedSpritesQueue,x
+    lda #$FF
+    sta pSortTable,x
+    sta pAnimDatHandle,x
+    dex
+    bpl -
+    sta pSortTable+cMaxSprite
+    rts    
+
+MakeNewSpriteActorX: ; returns available actor-id in X, Zero-Flag indicates fail
+    ldx zvNextUnusedSprite
+    beq .GetNewSpriteEmpty
+    lda pUnusedSpritesQueue,x
+    ldx zvNextInsertSprite
+    sta pSortTable,x
+    dec zvNextUnusedSprite
+    inc zvNextInsertSprite
+    tax
+.InitSpriteActor:    
+    lda #$FE                ; init Y mit max
+    sta pSpriteYPos+$00,x
+    sta pSpriteYPos+$20,x
+    sta pSpriteYPos+$40,x
+    sta pSpriteYPos+$60,x
+    sta pSpriteYPos+$80,x
+    sta pSpriteYPos+$A0,x
+    sta pSpriteYPos+$C0,x
+    sta pSpriteYPos+$E0,x
+    rts
+.GetNewSpriteEmpty
+    rts
+    
+    
+SpriteMultiplexerRun:
+
+.SortSprites:
+    lda zvDisplaySpriteFrame
+    sta .SortSpriteY1
+    sta .SortSpriteY2
+    sta .SortSpriteY3
+    sta .SortSpriteY4
+    sta .SortSpriteY5
+    ldx #0                  ; 2
+    
+.SortContinueAfterSwap:
+    ldy pSortTable,x        ; 4  y: compare actor#
+    bmi .SortFinished
+    
+.SortNoSwap:    
+.SortSpriteY1 = *+1    
+    lda pSpriteYPos,y       ; 4  A: compare actorY
+    inx                     ; 2  x: next sort index
+    ldy pSortTable,x        ; 4  y: next actor#
+    bmi .SortFinished    
+.SortSpriteY2 = *+1
+    cmp pSpriteYPos,y       ; 4
+    bcc .SortNoSwap         ; prev <= next all ok
+    beq .SortNoSwap
+    
+.Swap:
+    stx .sortRestoreX
+    sty .sortRestoreY    
+
+.SortSpriteY3 = *+1    
+    lda pSpriteYPos,y       ; 4  A: insert actorY
+    
+    ldy pSortTable-1,x
+.SwapLoop:
+    sty pSortTable,x
+    dex
+    beq .SwapFinish
+    ldy pSortTable-1,x
+.SortSpriteY4 = *+1    
+    cmp pSpriteYPos,y
+    bcc .SwapLoop       ; insert < prev : continue swap
+
+.SwapFinish:
+.sortRestoreY = *+1
+    ldy #0
+    sty pSortTable,x
+.sortRestoreX = *+1
+    ldx #0
+    bne .SortContinueAfterSwap
+    
+.SortFinished:    
+
+;; Alle Sprites mit Y=255 freigeben
+.ReleaseSprites:
+-   dex                             ; 2
+    bmi .ReleaseSpritesEmpty        ; 2/3   Sprite-Liste ist komplett leer
+    ldy pSortTable,x                ; 4
+    lda #$FF                        ; 2
+.SortSpriteY5 = *+1    
+    cmp pSpriteYPos,y               ; 4
+    bne .ReleaseSpritesEnd          ; 3/2   __17 cycles falls kein Sprite released wird       
+    sta pSortTable,x
+    tya                             ; 2
+    inc zvNextUnusedSprite          ; 5
+    ldy zvNextUnusedSprite          ; 3
+    sta pUnusedSpritesQueue, y      ; 5    
+    stx zvNextInsertSprite          ; 3    
+    lda pAnimDatHandle,y            ; 4
+    bmi -                           ; 2/3
+    tay                             ; 2
+    lda #$ff                        ; 2
+    sta pSpriteHandles,y            ; 5
+    bne -                           ; 3     __50 pro Sprite released + 17
+.pVicSActiveMask: !byte $00,$01,$03,$07,$0F,$1F,$3F,$7F
+.ReleaseSpritesEmpty:
+.ReleaseSpritesEnd:
+    inx
+    lda #$FF
+    cpx #8
+    bcs +
+    and .pVicSActiveMask,x
++   sta vic_sactive
+
+    ; Nach dem Sortieren kann gleich der erste Irq zusammengestellt und geplant werden 
+
+    lda vSpriteBaseHi
+.pSpritePtrHiPos0 = pSetVicSpriteData0 + cSetVicSpriteDataHiOff;    
+    sta .pSpritePtrHiPos0 + (0 * pSetVicSpriteDist)
+    sta .pSpritePtrHiPos0 + (1 * pSetVicSpriteDist)
+    sta .pSpritePtrHiPos0 + (2 * pSetVicSpriteDist)
+    sta .pSpritePtrHiPos0 + (3 * pSetVicSpriteDist)
+    sta .pSpritePtrHiPos0 + (4 * pSetVicSpriteDist)
+    sta .pSpritePtrHiPos0 + (5 * pSetVicSpriteDist)
+    sta .pSpritePtrHiPos0 + (6 * pSetVicSpriteDist)
+    sta .pSpritePtrHiPos0 + (7 * pSetVicSpriteDist)   ; __36  27b
+
+    ldx #0
+    stx zpHwSpriteBlock
+    stx zpHwSpriteBlock+1
+    stx zpHwSpriteBlock+2
+    stx zpHwSpriteBlock+3
+    stx zpHwSpriteBlock+4
+    stx zpHwSpriteBlock+5
+    stx zpHwSpriteBlock+6
+    stx zpHwSpriteBlock+7
+    
+;; A contains current Interrupt Line
+;; X contains Index of current SortTable Entry
+;; Y contains SpriteFrameIndex // Actor OR (Frame# << 5)
+!macro CheckWriteSpriteToIrq .ix {
+    cmp zpHwSpriteBlock +.ix     ; 4     3b
+    ror zvSpriteIrqMask         ; 5     2b
+    bpl .Next                   ; 2/3   2b
+    
+    ;; Write Sprite Actor Index
+    sty pSetVicSpriteData0 + cSetVicSpriteIndexOff + (.ix * pSetVicSpriteDist)   ; 4    3b    
+
+    ;; Write MsbX
+    lda pSpriteXPosHi,y         ; 4     3b
+    beq .WriteSpriteMsb0        ; 2/3   2b
+.WriteSpriteMsb1:
+    lda zvSpriteIrqMsbX         ; 3     2b
+    ora #(1 << .ix)             ; 2     2b
+    sta zvSpriteIrqMsbX         ; 3     2b    __7/14
+    lda pSpriteXPos,y           ; 4
+    bpl +                       ; 2/3
+    adc #-8                     ; 2, carry is set   ; negative value offset for sprites is added here
+    clc                         ; 2, carry is clear
+    bcc +                       ; 3, always
+.WriteSpriteMsb0:
+    lda pSpriteXPos,y           ; 4
++   sta pSetVicSpriteData0 + cSetVicSpriteXOff + (.ix * pSetVicSpriteDist)   ; 4    3b
+
+    
+.WriteSpriteExp:
+    ;; Write Exp-Flag AND calculate last Line of Sprite
+    lda pSpriteCFlag,y          ; 4     3b
+    bmi .WriteSpriteExp1        ; 2/3   2b
+    lda #cSpriteHwBlockLen      ; 2     2b
+    bne .WriteNewHwBlock        ; 3     2b    always taken
+.WriteSpriteExp1:
+    lda zvSpriteIrqExp          ; 3     3b
+    ora #(1 << .ix)             ; 2     2b
+    sta zvSpriteIrqExp          ; 3     3b
+    lda #cSpriteHwBlockLenExp   ; 2     2b
+.WriteNewHwBlock:
+    adc pSpriteYPos, y          ; 4     3b
+    bcc +                       ; 2/3   2b
+    lda #$FF                    ; 2     2b    clip to #$FF
++   sta zpHwSpriteBlock +.ix    ; 4     3b    __22/26
+    
+    inx                         ; 2     1b
+    lda pSortTable,x
+    bpl +                       ; 2/3   2b
+    lda zvSpriteIrqMask         ; 2     2b
+    clc                         ; 2     1b
+    jmp EvaluateAfterLast + .ix ; 3     3b
++   ora zvDisplaySpriteFrame    ; 3     2b
+    tay                         ; 2     1b
+    lda zvNextIrqLine           ; 3     2b
+.Next:                          ; ___ Not Set: 12   Set: 72
+}
+
+.cSafetyLinesBeforeSprite = 4
+.cSafetyLinesToCurrentLine = 8
+                    
+.EvaluateSprite:
+                lda pSortTable,x            ; 4
+                bpl +
+                jmp IrqScheduleNextFrame
++               ora zvDisplaySpriteFrame    ; 3     2b
+                tay                         ; 2     1b
+
+.CreateNextInterrupt:
+
+                ; Reset Irq Data
+                lda #0                  ; 2
+                sta zvSpriteIrqMask     ; 3
+                sta zvSpriteIrqMsbX     ; 3
+                sta zvSpriteIrqExp      ; 3
+                
+                lda vic_line            ; 4
+                adc #.cSafetyLinesToCurrentLine+.cSafetyLinesBeforeSprite ; 2
+                bcs ++
+                cmp pSpriteYPos,y
+                bcc +
+                inx
+                bcs .EvaluateSprite                
++               sec                
+                ; Pick first actor, determine interrupt line
+++              lda pSpriteYPos,y
+                sbc #.cSafetyLinesBeforeSprite
+                ;; jetzt noch schauen, ob der Interrupt mindestens x Lines nach der aktuellen kommt!
+                bcs + ; Y-Pos from 0 to .cSafetyLines are not visible anyway... Skip.                
+                inx
+                bcc .EvaluateSprite
+                
+                ; A: Line to schedule Interrupt on.
+                ; X: Sort Index
+                ; Y: Sprite Index
++               sta zvNextIrqLine         
+
+                +CheckWriteSpriteToIrq 0
+                +CheckWriteSpriteToIrq 1
+                +CheckWriteSpriteToIrq 2
+                +CheckWriteSpriteToIrq 3
+                +CheckWriteSpriteToIrq 4
+                +CheckWriteSpriteToIrq 5
+                +CheckWriteSpriteToIrq 6
+                +CheckWriteSpriteToIrq 7
+                
+                lda zvSpriteIrqMask     ; 3     see if any Sprite got into the irq
+                bne .FinalizeInterruptData
+                inx                     ; 2     Skip this index         
+                jmp .EvaluateSprite     ; 3     and restart loop 
+
+.FinalizeInterruptData:     ; A is zvSpriteIrqMask
+                stx .vNextEvalSprite    ; 4     remember next index for next interrupt
+                eor #$FF                ; 2
+                and pSpriteIrqMsbX      ; 4
+                ora zvSpriteIrqMsbX     ; 3
+                sta pSpriteIrqMsbX      ; 4     __16
+
+                lda zvSpriteIrqMask
+                eor #$FF                ; 2
+                and pSpriteIrqExp       ; 4
+                ora zvSpriteIrqExp      ; 3
+                sta pSpriteIrqExp       ; 4     __16
+                
+                lda #<.NextSpriteIrq    ; low part of address of interrupt handler code
+                sta cpu_irq	              ; store in interrupt vector
+                lda #>.NextSpriteIrq    ; high part of address of interrupt handler code
+                sta cpu_irq+1             ; store in interrupt vector
+                
+                lda zvNextIrqLine
+                sta vic_line
+
+;                lda #0
+;                sta vic_cborder
+                                
+                pla:tay:pla:tax:pla ; restore all registers
+                asl vic_irq			; enable next interrupt	
+                
+                rti    
+                
+EvaluateAfterLast: 
+                ror     ; after 0
+                ror     ; after 1
+                ror     ; after 2
+                ror     ; after 3
+                ror     ; after 4
+                ror     ; after 5
+                ror     ; after 6
+                sta zvSpriteIrqMask ; after 7
+                jmp .FinalizeInterruptData
+                
+                
+ ;; Evaluieren könnte man auch Prima nur bis zum nächsten Interrupt,
+;; und Nach dem Setzen der neuen Sprites dann erst die Daten für den nächsten Interrupt aufbauen
+
+; Irq-Data: 8xActorFrame#, msbx, exp, mask
+!macro SetVicSpriteData .ix {
+    ror                         ; 2
+    bcc .Next                   ; 2/3
+    ldx #0                      ; 2
+    ldy #0                      ; 2
+    sty vic_xs0+(2*.ix)         ; 4
+    ldy pSpriteYPos,x           ; 4
+    sty vic_ys0+(2*.ix)         ; 4
+    ldy pSpriteCFlag,x          ; 4
+    sty vic_cs0+.ix             ; 4
+    ldy pSpriteIcon,x           ; 4  
+    sty ($0400 + 1016)+.ix      ; 4    __5/36    28b (*8)
+.Next:
+}
+
+
+.NextSpriteIrq:
+    ;; Rasterlines time: [20, 83, 146, 209, 272, 335, 398]
+    ;; 59 + Sprites * 33 : [92, 127, 160, 193, 226, 259, 292, 325]
+    ;; Rasterlines required: [3, 4, 4, 5, 5, 6, 6, 7] = (3 + (SprCount/2))
+	pha:txa:pha:tya:pha     ; 13T Save Registers on stack
+
+;    lda #4
+;    sta vic_cborder
+
+    
+pSpriteIrqMsbX = *+1    
+    lda #0                  ; 2
+    sta vic_msb_xs          ; 4
+    
+pSpriteIrqExp = *+1    
+    lda #0                  ; 2
+    sta vic_sdx             ; 4
+    sta vic_sdy             ; 4 __16
+    
+    lda zvSpriteIrqMask     ; 3
+pSetVicSpriteData0:
+    +SetVicSpriteData 0
+pSetVicSpriteData1:
+    +SetVicSpriteData 1
+    +SetVicSpriteData 2
+    +SetVicSpriteData 3
+    +SetVicSpriteData 4
+    +SetVicSpriteData 5
+    +SetVicSpriteData 6
+    +SetVicSpriteData 7
+
+.vNextEvalSprite = *+1
+    ldx #0                  ; 2
+    jmp .EvaluateSprite
+    
+    
+pSetVicSpriteDist = (pSetVicSpriteData1 - pSetVicSpriteData0)
+cSetVicSpriteIndexOff = 4
+cSetVicSpriteXOff = 6
+cSetVicSpriteDataHiOff = pSetVicSpriteDist-1
+
+

@@ -1,0 +1,171 @@
+; enable illegal opcodes (e.g. LAX)
+!cpu 6510
+
+!zone SCROLLER_BLITSYMBOLS
+
+!if (cSymbolDataSymbolCount > cEOT){ !error "EOT kleiner als Anzahl Zeichen im Zeichensatz" }
+
+
+; TIMING:
+; BlitLastColumn needs up to 270 cycles 
+; IncTextPage needs 95 cycles
+; CopyFromPrevPage needs ~#columns * 80 + 5 cycles
+; When Scroll speed is limited to 2px/frame, we can split the next page blit in 4 phases:
+; phase 1 : IncTextPage + 10 columns = 		~900
+; phase 2,3 : 11 columns =					~890
+; phase 4 : BlitLastColumn, 7 columns =		~850,
+
+; TODO: nochmal rechnen nach Table rotation
+
+
+.cInitialPageBaseAddress = $C800
+.cInitialPrevPageBaseAddress = $FC00
+
+.cScrollerBaseAddrFirstPage = .cInitialPrevPageBaseAddress+(cScrollerFirstCharRow*40);
+.cScrollerBaseAddrWorkingPage = .cInitialPageBaseAddress+(cScrollerFirstCharRow*40);
+
+.pScrollStepXOffset: !byte 6,0,2,4
+.pScrollStepCopyColumns: !byte 40,33,22,11
+
+ScrollTextStep:
+vCurrentScrollStep = *+1
+	ldy #0
+	bne +
+	ldy #4
++	dey
+	sty vCurrentScrollStep
+	ldx .pScrollStepXOffset,y
+    stx vScrollerXOffset
+	ldx .pScrollStepCopyColumns,y
+
+CopyFromPrevPage:	; X:Starting Column		; ~#columns * 80 + 4.
+    ldy .vCopyLastColumn
+    stx .vCopyLastColumn
+	
+.pCopyPageCommands:
+!for Line, 0, cScrollTextHeightCharLines-1{	
+	lda .cScrollerBaseAddrFirstPage+(Line*40)+1,y	; 4/5
+	sta .cScrollerBaseAddrWorkingPage+(Line*40),y		; 5
+}
+	iny
+.vCopyLastColumn = *+1
+	cpy #$00
+	bne .pCopyPageCommands
+	cpy #40
+	beq BlitLastColumn
+	rts		
+	
+pTextPageBaseAddressHiTable:
+	!byte $C8,$CC,$E0,$E4,$E8,$EC,$F0,$F4,$F8,$FC,$00 ; add for easy rotation
+	
+	
+BlitLastColumn:
+!if (cScrollerFirstCharRow != 3){ !error "SetupBlitTextPage anpassen" }
+!if (cScrollTextHeightCharLines != 8){ !error "SetupBlitTextPage anpassen" }
+.vCurrentWorkingTextPageIndex = *+1
+	ldx #0								; 2
+	ldy pTextPageBaseAddressHiTable,x 	; 5	
+	sty .pBlitColumnCommands+5+(6*0)	;	offset 159
+	sty .pBlitColumnCommands+5+(6*1)	;	offset 199
+	sty .pBlitColumnCommands+5+(6*2)	;	offset 239
+	iny
+	sty .pBlitColumnCommands+5+(6*3)	;	offset 279
+	sty .pBlitColumnCommands+5+(6*4)	;	offset 319
+	sty .pBlitColumnCommands+5+(6*5)	;	offset 359
+	sty .pBlitColumnCommands+5+(6*6)	;	offset 399
+	sty .pBlitColumnCommands+5+(6*7)	;	offset 439
+	; ____42
+
+.vCurrentSymbol = *+1
+	ldy #0											; 2
+.vCurrentSymbolOffset = *+1	
+	ldx #0											; 2
+	bne .blitColumn									; 2/3
+
+;	Set SrcData-Ptr in BlitLines (lo and hi of lda $ffff,x) : 16*8 + 5 + 5 = 138
+    dec $01
+!for .Line, 0, cScrollTextHeightCharLines-1{
+	lda DATA_Symbolset_lo_table+(.Line*cSymbolDataSymbolCount), y
+	sta .pBlitColumnCommands+1+(6*.Line)
+	lda DATA_Symbolset_hi_table+(.Line*cSymbolDataSymbolCount), y
+	sta .pBlitColumnCommands+2+(6*.Line)
+}	
+    inc $01
+
+.blitColumn:
+.pBlitColumnCommands = * 								; 64 / max 70, mean 65
+!for .Line, 0, cScrollTextHeightCharLines-1{	
+	lda $ffff,x										; 4/5
+	sta .cScrollerBaseAddrWorkingPage+39+(.Line*40)	; 4
+}
+
+	inx								; 2
+.vCurrentSymbolWidth = *+1	
+	cpx #2							; 2			; 80
+	bne .endBlitLastColumn			; 2/3       ; When Equal, Carry is always set
+.incTextPtr
+	inc .pCurrentTextPtr            ; 6
+	bne +                           ; 2/3
+	inc .pCurrentTextPtr+1          ; 6
+.pCurrentTextPtr = *+1    
++   lax DATA_ScrollText_Start-1     ; 4
+	sbc #cEOT						; 2         ; Carry is always set on begin
+    beq .wrapText                   ; 2/3
+    bmi .noWrapText                 ; 2/3
+    sta vCurrentTextCommand
+    jmp .incTextPtr                 ; 3
+.wrapText
+	lda #<DATA_ScrollText_Start		; 2
+	sta .pCurrentTextPtr			; 4
+	lda #>DATA_ScrollText_Start		; 2
+	sta .pCurrentTextPtr+1			; 4
+   	ldx DATA_ScrollText_Start   	; 4
+.noWrapText
+	stx .vCurrentSymbol				; 4
+	lda DATA_Symbolset_width_table,x ; 4
+	sta .vCurrentSymbolWidth		; 4
+	ldx #0							; 2
+.endBlitLastColumn
+	stx .vCurrentSymbolOffset		; 4	
+
+.IncTextPage:	; 95 worst case
+	lax .vCurrentWorkingTextPageIndex   ; 4
+	bne +								; 2/3
+	ldy #cCountTextPages-1				; 2
+    bne .contIncTextPage                ; 3
++   tay                                 ; 2
+	dey									; 2
+	; X: Prev Page Index, Y: Next Page Index
+.contIncTextPage    
+	stx vFirstTextPageIndex             ; 4
+ 	sty .vCurrentWorkingTextPageIndex	; 4
+	lda pTextPageBaseAddressHiTable,x 	; 4
+	ldx pTextPageBaseAddressHiTable,y 	; 4
+	tay									; 2		__29 always
+	; X: Next Page Hi , Y: Prev Page Hi
+
+!if (cScrollerFirstCharRow != 3){ !error "IncTextPage anpassen" }
+!if (cScrollTextHeightCharLines != 8){ !error "IncTextPage anpassen" }
+	
+	sty .pCopyPageCommands+2+(6*0)	;	offset 120
+	stx .pCopyPageCommands+5+(6*0)	;	offset 120
+	sty .pCopyPageCommands+2+(6*1)	;	offset 160
+	stx .pCopyPageCommands+5+(6*1)	;	offset 160
+	sty .pCopyPageCommands+2+(6*2)	;	offset 200
+	stx .pCopyPageCommands+5+(6*2)	;	offset 200
+	sty .pCopyPageCommands+2+(6*3)	;	offset 240
+	stx .pCopyPageCommands+5+(6*3)	;	offset 240
+	inx
+	iny
+	sty .pCopyPageCommands+2+(6*4)	;	offset 280
+	stx .pCopyPageCommands+5+(6*4)	;	offset 280
+	sty .pCopyPageCommands+2+(6*5)	;	offset 320
+	stx .pCopyPageCommands+5+(6*5)	;	offset 320
+	sty .pCopyPageCommands+2+(6*6)	;	offset 360
+	stx .pCopyPageCommands+5+(6*6)	;	offset 360
+	sty .pCopyPageCommands+2+(6*7)	;	offset 400
+	stx .pCopyPageCommands+5+(6*7)	;	offset 400	__68
+
+    lda #0
+    sta .vCopyLastColumn    
+	rts        

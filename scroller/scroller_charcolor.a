@@ -1,0 +1,128 @@
+; COMMON HEADERS
+!src <6502/opcodes.a>
+!src <6502/std.a>
+!src <cbm/c64/cia1.a>
+!src <cbm/c64/cia2.a>
+!src <cbm/c64/vic.a>
+
+;; Char Color Effext: Die Umrandung des Fonts ist mit der Vordergrund-Zeichenfarbe
+;; Durch Scrollen eines Farbgradienten kann man also ein Gleißen / Blinken herbeiführen
+
+!zone CharColorEffectZone
+
+;; in der MainAnimationLoop jedes Frame jsr CharColorEffect aufrufen und von Zeit zu zeit jsr StartCharColorEffect
+
+
+;; Zum Starten eines Durchlauf mit x = command# aufrufen
+StartCharColorEffect:
+    lda #0
+    sta .pCharColorStartXOffset
+    sta .pCharColorStartGradientOffset
+    lda .pCharColorCommandToGradient,x
+    sta .pCharColorCurrentGradient
+    
+    +SetJmpDst CharColorEffect, .CharColorEffectFrame
+    rts
+    
+
+    
+.CharColorEffectFrame:
+
+.pCharColorStartXOffset = *+1
+    ldx #0
+.pCharColorStartGradientOffset = *+1
+    ldy #0
+    
+-   lda .CharColorLineBlitJumpTable,x
+    sta .CharColorBlitCmd
+.pCharColorCurrentGradient = *+1
+    lda .pCharColorGradients,y
+    bmi .CharColorLineExitFrame
+    
+.CharColorBlitCmd = *+1
+    jmp .CharColorLineBlitCommands
+.CharColorBlitCmdReturn:
+    iny
+    dex
+    bpl -
+    
+.CharColorLineExitFrame
+    ; Exit bei y==0? dann ende
+    cpy .pCharColorStartGradientOffset
+    bne +
+
+    ; Exit Effect
+    +SetJmpDst CharColorEffect, CharColorEffectReturn
+    
++   ; PREPARE NEXT FRAME
+    inc .pCharColorStartXOffset
+    jmp CharColorEffectReturn
+
+;; Für jede X-Position gibts eine eigene Funktion / Startadresse zum Speichern der Farbe.
+;; Der Farbverlauf wird schräg '/' in den Farbspeicher gepumpt.
+.CharColorLineBlitCommands:
+
+;; Einsprungspunkte, um nur die ersten paar Zeilen zu setzen (für x positionen bis cScrollTextHeightCharLines)
+.CharColorLineBlitDiagStart
+!for .cLine, cScrollTextHeightCharLines-1, 0 {
+    sta $d800 + (40 * (cScrollerFirstCharRow + .cLine)) -.cLine, x
+}
+    jmp .CharColorBlitCmdReturn
+
+;; Einsprungspunkte, um nur die letzten paar Zeilen zu setzen (für x positionen ab 40)
+.CharColorLineBlitDiagEnd    
+!for .cLine, 0, cScrollTextHeightCharLines-1{
+    sta $d800 + (40 * (cScrollerFirstCharRow + .cLine)) -.cLine, x
+}
+    jmp .CharColorBlitCmdReturn
+
+;; Einsprungspunkt für 40+cScrollTextHeightCharLines : nichts setzen, aber den Farbverlauf statt x weiterscrollen
+.CharColorLineBlitIncColorStart:
+    inc .pCharColorStartGradientOffset
+    dec .pCharColorStartXOffset
+    jmp .CharColorBlitCmdReturn
+    
+;; Noch Schneller, wenn nur lo-Byte gesetzt werden muss.
+!if >* != >.CharColorLineBlitCommands {
+	!error "Blit Code must fit inside page"
+}
+
+;;;;;;;;;;;;;;;;;;;;;;;;
+;; DATA
+;;;;;;;;;;;;;;;;;;;;;;;;    
+    
+.pCharColorGradients:
+.pCharColorGradientsData0:
+    !byte $0E,$0C,$0B,$09,$0F,$09,$0B,$0E,$FF
+.pCharColorGradientsData1:
+    !byte $08,$08,$08,$08,$08,$08,$08,$08,$FF
+.pCharColorGradientsData2:
+    !byte $08,$08,$08,$08,$08,$08,$08,$08,$FF
+.pCharColorGradientsData3:
+    !byte $08,$08,$08,$08,$08,$08,$08,$08,$FF
+!if >* != >.pCharColorGradients {
+	!error "ColorGradients must fit inside page"
+}
+.pCharColorCommandToGradient:
+    !byte <.pCharColorGradientsData0
+    !byte <.pCharColorGradientsData1
+    !byte <.pCharColorGradientsData2
+    !byte <.pCharColorGradientsData3
+.cCharColorCommandCount = * - .pCharColorCommandToGradient
+
+
+
+.CharColorLineBlitJumpTable:
+    !for .X, cScrollTextHeightCharLines-1, 0 {
+        !byte <.CharColorLineBlitDiagStart + (3 * .X)
+    }
+    !for .X, cScrollTextHeightCharLines, 39 {
+        !byte <.CharColorLineBlitDiagStart
+    }
+    !for .X, 0, cScrollTextHeightCharLines-1 {
+        !byte <.CharColorLineBlitDiagEnd + (3 * .X)
+    }
+    !byte <.CharColorLineBlitIncColorStart
+    
+
+

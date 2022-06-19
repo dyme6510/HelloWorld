@@ -1,0 +1,205 @@
+STANDALONE = 0
+
+!if (STANDALONE != 0) {
+	MODULE_START = $3800
+} else {
+	MODULE_START = $3800
+}
+!src "../main/common.a"
+	jmp .Init
+    
+pImageStreamStart:
+!bin "held3.stream"
+
+    
+;; Bildaufbau:
+; - $28: Border-Fade start : jede Zeile $3FFF der aktiven VIC-Bank anpassen
+; - $30: Border-Fade end -> illegal screen mode, um linecrunch zu verstecken ist noch aktiv
+; - $3x: Linecrunch start
+; - $3C: Visible Picture Area Start
+;           - sta vic_controlv : set Text Mode
+;           - sta vic_ram      : select Hires-color-Textscreen
+; - $XX: SpritePtr-Line BadLine:                                    
+;           -- PRECONDITION: SPRITE 0 AND 7 ALWAYS INACTIVE, SPRITE 1 ACTIVE, not 2 sprites inactive before an active sprite
+;           The inactiv Sprite may not be Sprite #6 for this timing:
+;           - sta vic_ram      : start@56 -> write@10  select SpritePtr-Line TextScreen (with color Data at 1016-1023)
+;           - stx vic_ram      : start@11 -> write@57  select Hires-color-Textscreen (with spritepointers)
+;           The inactive Sprite must be Sprite #6 for this timing:
+;           - sta vic_ram      : start@7 -> write@10  select SpritePtr-Line TextScreen (with color Data at 1016-1023)
+;           - stx vic_ram      : start@11 -> write@57  select Hires-color-Textscreen (with spritepointers)
+; - $F8: Visible Picture Area End; Border-Fade start
+;           - sta vic_controlv : set TextMode
+;           - sta vic_ram      : select Border-Fade-Textscreen (alle Zeichen der letzten zeile auf border-fade-char gesetzt)
+;        Die letzten x Zeilen des border-fade-char müssen angepasst worden sein
+; - $Fx: First line of $3FFF-Access
+;        Jede Zeile die restlichen Border-fade-lines (die nicht in den Border-fade-char gepasst haben) nach $3FFF schieben
+; -$101: spätestens jetzt Border-fade=$FF ($100 is die letzte, mit $FF mögliche Sprite-Y-Kooridinate)
+
+
+    
+!src "picscroll_constants.a"
+!src "picscroll_rastercode.a"
+!src "picscroll_scrollcode.a"
+
+.cVicMemPtr = (((>cGfxTextPageOffset) << 2) & $F0) | (((>cGfxBitmapOffset) >> 2) & $0F)
+.cVicMemoryBankBitsScreen0 = ((>cScreen0VicBankBase) >> 6) XOR 3
+.cVicMemoryBankBitsScreen1 = ((>cScreen1VicBankBase) >> 6) XOR 3
+
+.Init:
+    
+    ldx #$A0
+    ldy #$CF
+    jsr ClearPagesX2Y
+    ldx #$E0
+    ldy #$FE
+    jsr ClearPagesX2Y
+    ldx #$80
+    ldy #$83
+    jsr ClearPagesX2Y
+    
+
+    ;select vic-bank %10 : $4000-$8000
+    lda $DD00
+    and #$FC
+    ora #.cVicMemoryBankBitsScreen0
+    sta $DD00
+
+ 	lda #.cVicMemPtr        ;.cVicMemPtr
+	sta vic_ram
+
+    lda #cVicVModePic
+    sta vic_controlv
+
+    lda vic_controlh
+    and #%11101111 ; multicolor OFF
+    sta vic_controlh
+
+!if (STANDALONE != 0) {
+    jsr $1000
+}
+    
+    sei
+	lda #$01
+	sta vic_irqmask	; Turn on raster interrupts    
+    
+    jsr ScheduleFirstSpriteIrq
+    cli    
+    	
+	
+	lda #$FF
+    sta vic_sactive
+	
+	
+    lda #$F0
+    sta vic_msb_xs
+    
+    ldx #0
+-    
+!for .P, 0, 7{
+    lda pSpriteBitmapsPage0 + (256*.P),x
+    sta pSpriteBitmapsPage1 + (256*.P),x
+}
+    inx
+    bne -
+    
+    jmp ScrollCodeBackgroundLoop
+    
+    rts	 
+    
+ 
+    
+;!src "picscroll_rastercode.a"
+
+;.cPicYOffset = 12
+
+;*=pGfxBitmapPage0
+;!bin "held3.map",8000, (40*8*   .cPicYOffset)
+;*=pGfxTextPage0    
+;!bin "held3.scr",2000, (40*     .cPicYOffset)
+;*=pGfxSpritePage0    
+;!bin "..\fireblur\sprites_charset.bin"
+;*=pGfxLogoPage0    
+;!bin "dyme_logo.bin"
+;*=pSpriteX
+;!byte 30,60,90,120,150,180,210,240,30,60,90,120,150,180,210,240,30,60,90,120,150,180,210,240,30,60,90,120,150,180,210,240
+;!byte 30,60,90,120,150,180,210,240,30,60,90,120,150,180,210,240,30,60,90,120,150,180,210,240,30,60,90,120,150,180,210,240
+;!byte 30,60,90,120,150,180,210,240,30,60,90,120,150,180,210,240,30,60,90,120,150,180,210,240,30,60,90,120,150,180,210,240
+;!byte 30,60,90,120,150,180,210,240,30,60,90,120,150,180,210,240,30,60,90,120,150,180,210,240,30,60,90,120,150,180,210,240
+;!byte 30,60,90,120,150,180,210,240,30,60,90,120,150,180,210,240,30,60,90,120,150,180,210,240,30,60,90,120,150,180,210,240
+;!byte 30,60,90,120,150,180,210,240,30,60,90,120,150,180,210,240,30,60,90,120,150,180,210,240,30,60,90,120,150,180,210,240
+;!byte 30,60,90,120,150,180,210,240,30,60,90,120,150,180,210,240,30,60,90,120,150,180,210,240,30,60,90,120,150,180,210,240
+;!byte 30,60,90,120,150,180,210,240,30,60,90,120,150,180,210,240,30,60,90,120,150,180,210,240,30,60,90,120,150,180,210,240
+;*=pSpriteColor
+;!byte 0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7
+;!byte 0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7
+;!byte 0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7
+;!byte 0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7
+;*=pSpriteData
+;!scr "abcdefghijklmnopqrstuvwzyzabcdefghijklmnopqrstuvwzyzabcdefghijklmnopqrstuvwzyzabcdefghijklmnopqrstuvwzyzabcdefghijklmnopqrstuvwzyzabcdefghijklmnopqrstuvwzyz"
+;pSpriteDataEnd = *
+
+!warn "CODE: ", MODULE_START, " - ", *, "  Size: ", *-MODULE_START
+
+
+!if (STANDALONE != 0) {
+*= $1000
+!bin "..\..\nd_proj\scroller\music.bin"
+}
+
+.cPictureDataLineCount = 3*25;
+.cBlankLinesFront = 26;
+.cVirtualLineCount = 128;
+    
+* = pSpriteBitmapsPage0    
+!bin "sprites_charset1.bin"
+* = pMaskData
+!bin "held3.mask"
+* = pMultiply8Table
+!for .V, 0, 31{
+    !byte .V*8
+}
+* = pMaskLinePtrsLo
+!for .Line, 0, .cVirtualLineCount-1{
+    !if ((.Line < .cBlankLinesFront) | (.Line >= (.cBlankLinesFront+.cPictureDataLineCount))){
+        !byte <pEmptyMaskLine
+    }else{
+        !set .cDataLine = (.cPictureDataLineCount-1) - (.Line-.cBlankLinesFront)
+        !byte <(pMaskData + (.cDataLine * 20))    
+    }
+}
+* = pMaskLinePtrsHi
+!for .Line, 0, .cVirtualLineCount-1{
+    !if ((.Line < .cBlankLinesFront) | (.Line >= (.cBlankLinesFront+.cPictureDataLineCount))){
+        !byte >pEmptyMaskLine
+    }else{
+        !set .cDataLine = (.cPictureDataLineCount-1) - (.Line-.cBlankLinesFront)
+        !byte >(pMaskData + (.cDataLine * 20))    
+    }
+}
+!ct "convtab.bin"
+* = pSpriteData1
+!text "@@@@@@@@* unreadable sprite scrollers are the best! but i really worked hard to make it decipherable! *@@@@@@@@@@@@@@@@@@@@@@@@@"
+!text "@@@@@@@@sometimes i think coming up with stupid text for all the scrollers was the hardest part * urgs *@@@@@@@@@@@@@@@@@@@@@@@@"
+
+* = pSpriteData2
+!text "@@@@@@@@yay! so i finally came up with a way to make people watch the demo more than once! nice? or not!@@@@@@@@@@@@@@@@@@@@@@@@"
+!text "@@@@@@@@peace and love to all the folks at x party mmxviii and thanks to the romans for their numbers!!!@@@@@@@@@@@@@@@@@@@@@@@@"
+
+
+* = pSpriteColor1
+!scr  "aaaaaaaagaaaaaaaaaaaameghmeaaaaaaaaaaaaaaaaaaaggggiaaaaaaaggggggaaaaaaaaccccaaaaaaaaaaaaaaaaaaaaaaaagaga@@@@@@@@@@@@@@@@@@@@@@@@"
+!scr  "dddddddddddddddddddddddddddddddddddddddddffffffddddddddddddddddddcccccccccdddddddddfffffffddddddcddddddc@@@@@@@@@@@@@@@@@@@@@@@@"
+* = pSpriteColor2
+!scr  "aaaaaaaaggggaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaahhhhaaaaaaaaaaaaaaaaaaaaaaaaaaaaag@@@@@@@@@@@@@@@@@@@@@@@@"
+!scr  "ddddddddddddddddddbbbbdddddddddddddddddddddfffffffdddddddddddddbbbbbbddddddddddddddddddddddddddddddddbbb@@@@@@@@@@@@@@@@@@@@@@@@"
+
+* = pSpriteSinTableX
+!byte $20,$22,$23,$25,$26,$28,$29,$2b,$2c,$2e,$2f,$30,$32,$33,$34,$35,$37,$38,$39,$3a,$3b,$3b,$3c,$3d,$3e,$3e,$3f,$3f,$3f,$40,$40,$40
+!byte $40,$40,$40,$40,$3f,$3f,$3f,$3e,$3e,$3d,$3c,$3b,$3b,$3a,$39,$38,$37,$35,$34,$33,$32,$30,$2f,$2e,$2c,$2b,$29,$28,$26,$25,$23,$22
+!byte $20,$1e,$1d,$1b,$1a,$18,$17,$15,$14,$12,$11,$10, $e, $d, $c, $b, $9, $8, $7, $6, $5, $5, $4, $3, $2, $2, $1, $1, $1, $0, $0, $0
+!byte  $0, $0, $0, $0, $1, $1, $1, $2, $2, $3, $4, $5, $5, $6, $7, $8, $9, $b, $c, $d, $e,$10,$11,$12,$14,$15,$17,$18,$1a,$1b,$1d,$1e
+!byte $20,$22,$23,$25,$26,$28,$29,$2b,$2c,$2e,$2f,$30,$32,$33,$34,$35,$37,$38,$39,$3a,$3b,$3b,$3c,$3d,$3e,$3e,$3f,$3f,$3f,$40,$40,$40
+!byte $40,$40,$40,$40,$3f,$3f,$3f,$3e,$3e,$3d,$3c,$3b,$3b,$3a,$39,$38,$37,$35,$34,$33,$32,$30,$2f,$2e,$2c,$2b,$29,$28,$26,$25,$23,$22
+!byte $20,$1e,$1d,$1b,$1a,$18,$17,$15,$14,$12,$11,$10, $e, $d, $c, $b, $9, $8, $7, $6, $5, $5, $4, $3, $2, $2, $1, $1, $1, $0, $0, $0
+!byte  $0, $0, $0, $0, $1, $1, $1, $2, $2, $3, $4, $5, $5, $6, $7, $8, $9, $b, $c, $d, $e,$10,$11,$12,$14,$15,$17,$18,$1a,$1b,$1d,$1e
+

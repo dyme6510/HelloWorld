@@ -1,0 +1,17 @@
+cEOP = cEOT+1 ; End Of Part
+
+DATA_ScrollText_Start:
+!scr "hello@world@!@@@@@@dyme@presents:@the@result@of@a@heavy@retro@fever@(and@a@mild@midlife-crisis)."
+!scr "@@released@at@the@x-party@2018!@@@@let's@keep@this@brief@@there's@more@to@come.@@"
+!byte cEOP ; Part end flag
+!scr "bye..!@</dyme>@@@@@@@@"
+!byte cEOT ; Scrolltext end flag
+
+!if (STANDALONE != 0) {
+*= $1000
+!bin "..\..\nd_proj\scroller\music.bin"
+}
+
+
+
+

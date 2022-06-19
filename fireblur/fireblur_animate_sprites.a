@@ -1,0 +1,455 @@
+
+!ZONE FIREBLUR_ANIMATE_SPRITES
+
+.cViewportMinX = -32        ; DX darf nicht kleiner sein als <cViewportMinX
+.cViewportMaxX = 360        ; DX darf nicht größer sein als <cViewportMaxX
+
+
+!macro SetActorSpriteHandle{
+    sta pAnimDatHandle,x
+    tay : txa
+    sta pSpriteHandles,y
+}
+
+AnimateAllSprites:
+    lda zvScreenBlitSpriteFrame
+    cmp zvSpriteAnimateFrontFrame
+    beq .AnimateAllSpritesEnd
+    sta .vAnimateTargetFrame
+
+    ldx #cMaxSprite-1
+-   lda pAnimDatCFlags,x
+    beq +
+    stx .vAnimateAllSpritesRestoreX
+    sta .vAnimateSpriteCFlag
+    jsr AnimateSprite
+.vAnimateAllSpritesRestoreX = *+1
+    ldx #0
++   dex
+    bpl -
+
+    lda .vAnimateTargetFrame
+    sta zvSpriteAnimateFrontFrame
+.AnimateAllSpritesEnd:
+    jsr .SpawnSpriteSinScroll
+    rts
+
+.DisableSpriteByCommandImpl:
+    lda #0
+    sta pAnimDatCFlags,x
+    txa
+    ora zvSpriteAnimateFrontFrame
+    clc
+    adc #cMaxSprite
+    tax
+    lda #$FF                ; 2
+    sta pSpriteYPos,x       ; 5
+    rts
+
+AnimateSprite:
+
+    lda pAnimDatWait,x
+    bne AnimateSpriteXY
+.AnimateFetchNextCommand:
+    ldy pAnimDatNextCmd,x
+    sty .vAnimateFetchRestoreY
+    lda .pCmdData,y
+    tay
+    lda .pCmdDataBase,y
+    sta .AnimateCommandSwitch + 1
+    clc
+.AnimateCommandSwitch:
+    bcc .AnimateCmdNop
+.AnimateCommandSwitchBase:
+.AnimateCmdDataXTabDx:
+    lda .pCmdDataBase+3,y
+    sta pAnimDatDX,x
+.AnimateCmdDataXTab:
+    lda .pCmdDataBase+1,y
+    sta pAnimDatXTabHi,x
+    lda .pCmdDataBase+2,y
+    sta pAnimDatXTabLo,x
+    bcc .AnimateCmdNop
+.DisableSpriteByCommand:
+    beq .DisableSpriteByCommandImpl
+.AnimateCmdDataYTabDy:
+    lda .pCmdDataBase+3,y
+    sta pAnimDatDY,x
+.AnimateCmdDataYTab:
+    lda .pCmdDataBase+1,y
+    sta pAnimDatYTabHi,x
+    lda .pCmdDataBase+2,y
+    sta pAnimDatYTabLo,x
+    bcc .AnimateCmdNop
+.AnimateCmdDX:
+    lda .pCmdDataBase+1,y
+    sta pAnimDatDX,x
+    bcc .AnimateCmdNop
+.AnimateCmdDY:
+    lda .pCmdDataBase+1,y
+    sta pAnimDatDY,x
+    bcc .AnimateCmdNop
+.AnimateCmdIcon:
+    lda .pCmdDataBase+1,y
+    sta pAnimDatIcon,x
+    bcc .AnimateCmdNop
+.AnimateCmdFlagsIcon:
+    lda .pCmdDataBase+3,y
+    sta pAnimDatIcon,x
+.AnimateCmdFlags:
+    lda .vAnimateSpriteCFlag,x
+    and .pCmdDataBase+1,y
+    ora .pCmdDataBase+2,y
+    sta .vAnimateSpriteCFlag,x
+    and #cSpriteCFlagActive
+    beq .DisableSpriteByCommand
+.AnimateCmdNop:
+
+.vAnimateFetchRestoreY = *+1
+    ldy #0
+    lda .pCmdNext,y
+    sta pAnimDatNextCmd,x
+    lda .pCmdWait,y
+    beq .AnimateFetchNextCommand
+    sta pAnimDatWait,x
+
+;; X: Actor index
+AnimateSpriteXY: ;; Animates 3 Frames for Move X,Y
+    lda pAnimDatIcon,x
+    sta .vAnimateSpriteIcon
+    dec pAnimDatWait,x
+    txa
+    ora zvSpriteAnimateFrontFrame
+    sta .vAnimateXYPrevFrame
+    txa
+.vAnimateTargetFrame = *+1
+    ora #00
+    sta .vAnimateXYLastFrame
+
+.AnimateCalcTables:
+    lda pAnimDatXTabHi,x
+    beq +
+    sta .AnimateXFetchTable+2
+    lda pAnimDatXTabLo,x
+    sta .AnimateXFetchTable+1
+    clc
+    adc #3
+    sta pAnimDatXTabLo,x
++   lda pAnimDatYTabHi,x
+    beq +
+    sta .AnimateYFetchTable+2
+    lda pAnimDatYTabLo,x
+    sta .AnimateYFetchTable+1
+    clc
+    adc #3
+    sta pAnimDatYTabLo,x
++
+
+.AnimateXYContinue:
+
+.AnimateCalcDX:
+    lda pAnimDatXTabHi,x
+    beq +
+.AnimateXFetchTable:
+    lda $FF00
+    inc .AnimateXFetchTable+1
++   clc
+    adc pAnimDatDX,x
+    sta .vMoveDX
+
+
+.AnimateCalcDY:
+    lda pAnimDatYTabHi,x
+    beq +
+.AnimateYFetchTable:
+    lda $FF00
+    inc .AnimateYFetchTable+1
++   clc
+    adc pAnimDatDY,x
+    sta .vMoveDY
+
+.vAnimateXYPrevFrame = *+1
+    lda #0
+    clc
+    adc #cMaxSprite
+    tay
+
+.vAnimateSpriteCFlag = *+1
+    lda #0
+    sta pSpriteCFlag,y
+.vAnimateSpriteIcon = *+1
+    lda #0
+    sta pSpriteIcon,y
+
+;; y: last SpriteFrame, x: next SpriteFrame
+MoveXY:
+    clc
+
+.MoveYStart:
+.vMoveDY = *+1
+    lda #0                  ; 2
+    bmi .MoveYSub           ; 2/3
+.MoveYAdd:
+    adc pAnimDatYPos,x      ; 4
+    bcc .MoveYEnd           ; 3/2
+.MoveDisableSprite:
+    lda #$FF                ; 2
+    sta pSpriteYPos,y       ; 5
+    lda #0
+    sta pAnimDatCFlags,x
+    rts
+.MoveYSub:
+    adc pAnimDatYPos,x      ; 4
+    bcc .MoveDisableSprite  ; 2/3
+    clc                     ; 2
+.MoveYEnd:
+    sta pAnimDatYPos,x      ; 5     __16/18
+    sta pSpriteYPos,y       ; 5
+
+.MoveXStart:
+.vMoveDX = *+1
+    lda #0                      ; 2
+    bmi .MoveXSub               ; 2/3
+.MoveXAdd:                      ; _5
+    adc pAnimDatXPos,x          ; 4
+    sta pAnimDatXPos,x          ; 5
+    sta pSpriteXPos,y           ; 5
+    lda pAnimDatXPosHi,x        ; 4
+    adc #0                      ; 2
+    sta pAnimDatXPosHi,x        ; 5
+    sta pSpriteXPosHi,y         ; 5
+    cmp #1                      ; 2
+    bne .MoveXEnd               ; 2/3
+.MoveXClipHi:
+    lda pAnimDatXPos,x          ; 4
+    cmp #<.cViewportMaxX        ; 2
+    bcc .MoveXEnd               ; 2/3
+    bcs .MoveDisableSprite      ; 2/3
+.MoveXSub:                      ; _6
+    adc pAnimDatXPos,x          ; 4
+    sta pAnimDatXPos,x          ; 5
+    sta pSpriteXPos,y           ; 5
+    lda pAnimDatXPosHi,x        ; 4
+    adc #$FF                    ; 2
+    sta pAnimDatXPosHi,x        ; 5
+    sta pSpriteXPosHi,y         ; 5
+    cmp #$FF                    ; 2
+    bne .MoveXEnd               ; 2/3
+.MoveXClipLo:
+    lda #<.cViewportMinX        ; 2
+    cmp pAnimDatXPos,x          ; 4
+    bcs .MoveDisableSprite      ; 3
+.MoveXEnd:                      ;
+
+
+.vAnimateXYLastFrame = *+1
+    cpy #0
+    beq .AnimateSpriteEnd
+    sty .vAnimateXYPrevFrame
+    jmp .AnimateXYContinue
+.AnimateSpriteEnd:
+    rts
+
+
+
+
+;; Animation Keyframe:
+;; XX YY FLAGS:Exp,Fire,Del,??,Color
+
+;; Animation State:
+;; XTabLo, XTabHi, dxConst, YTabLo, YTabHi, dyConst, NextCmd#, Duration (in Frames/3)
+
+;; Erst die drei Werte holen und dann durchbewegen?
+
+;; Command:
+;; Flags (SetXTab, SetXConst, SetYTab, SetYConst, FlagCmd), XTabLo, XTabHi, YTabLo, YTabHi, Flags, Delay, NextCmd#
+
+;; Spawn Sprite:
+;; Char#, Command#, Xlo, Xhi, Y, InitialFlags
+
+
+.CtXTab = .AnimateCmdDataXTab - .AnimateCommandSwitchBase
+.CtYTab = .AnimateCmdDataXTab - .AnimateCommandSwitchBase
+.CtDX = .AnimateCmdDX - .AnimateCommandSwitchBase
+.CtDY = .AnimateCmdDY - .AnimateCommandSwitchBase
+.CtXTabDx = .AnimateCmdDataXTabDx - .AnimateCommandSwitchBase
+.CtYTabDy = .AnimateCmdDataYTabDy - .AnimateCommandSwitchBase
+.CtFlags = .AnimateCmdFlags - .AnimateCommandSwitchBase
+.CtIcon = .AnimateCmdIcon - .AnimateCommandSwitchBase
+.CtFlagsIcon = .AnimateCmdFlagsIcon - .AnimateCommandSwitchBase
+.CtNop = .AnimateCmdNop - .AnimateCommandSwitchBase
+
+.cMaskExp = $FF - cSpriteCFlagExp
+.cMaskFire = $FF - cSpriteCFlagFire
+.cMaskActive = $FF - cSpriteCFlagActive
+.cMaskColor = $FF - cSpriteCFlagColor
+
+.pCmdTabSin = *
+
+.pCmdDataBase:
+.pCmdNop: !byte .CtNop
+.pCmd00: !byte .CtDX, -1
+.pCmd01: !byte .CtDX, 1
+.pCmd02: !byte .CtDX, -1
+.pCmd03: !byte .CtFlags, .cMaskColor, viccolor_BLUE
+
+.Cno = .pCmdNop - .pCmdDataBase
+.C00 = .pCmd00 - .pCmdDataBase
+.C01 = .pCmd01 - .pCmdDataBase
+.C02 = .pCmd02 - .pCmdDataBase
+.C03 = .pCmd03 - .pCmdDataBase
+
+.pCmdData  : !byte .Cno, .C00, .C01, .C02
+.pCmdWait  : !byte $FF,  15,   30,   30, $FF
+.pCmdNext  : !byte 0, 2, 3, 2
+
+
+
+
+
+
+
+.pSpriteStates:
+.pSpriteStateX:   !byte $FF, $00
+.pSpriteStateXHi: !byte $FF, $00
+.pSpriteStateY:   !byte $FF, $00
+.pSpriteStateCF:  !byte $FF, $00
+
+
+.pSpriteGlobalAnimationData:
+.pSGAHandle:    !byte $FF, $00
+.pSGAIcon:      !byte $00, $00
+.pSGAState:     !byte $01, $00
+.pSGACmdMove:   !byte $00, $00
+.pSGACmdFlag:   !byte $00, $00
+.pSGADelay:     !byte $00, $00
+
+
+
+; Movement "scroll left to right speed -1, wobble Amp64Len64"
+; Movement "fade in in rotating circle, rotate and fade out"
+
+
+
+; Character translation: space -> @
+;                        : -> [
+;                        . -> £
+;                        ? -> ]
+
+
+
+.pSinScrollText:
+    !scr "HI@everybody"
+    !byte 30
+    !scr "@@TIME@to@get@some@CREDITS@rolling"
+    !byte 30
+    !scr "@@@@code[@@DYME@@@@gfx[@@DYME@@@music[@@FEGOLHUZZ@@@@"
+    !scr "@@@many@THANKS@to[@@MEGASTYLE@for@inspiration@@ @@CHRISTIAN@BAUER@for@his@REPORT@@ @@MAGNUS@LIND@for@EXOMIZER@@the@VICE@team@@@@"
+    !scr " @ @ @@@@@@thats@ALL@folks@@@@@@@SERIOUSLY@@@i@did@not@think@ANYBODY@would@watch@so@LONG@@@@ @@@i@will@just@START@OVER@@@ @@@you@have@been@WARNED"
+    !byte 30
+    !scr "@ @ @ "
+    !byte cEOT
+
+.cSpawnSpriteSinScrollX = 340
+.cSpawnSpriteSinScrollY = 180
+.cSpawnSpriteSinScrollDX = -2
+.cSinScrollSpriteDistance = 4; 3 ; 3*3 Frames = 3*3*3 Pixel
+
+.SinScrollEOT:
+    lda #<.pSinScrollText
+    sta .wSinScrollSourceChar
+    lda #>.pSinScrollText
+    sta .wSinScrollSourceChar+1
+    lda #$30
+    sta .vSinScrollSpriteDistance
+    rts
+.SpawnSpriteSinScrollFail:
+    lda #$0
+    sta .vSinScrollSpriteDistance
+    rts
+
+.SpawnSpriteSinScroll:
+
+.vSinScrollSpriteDistance = *+1
+    lda #.cSinScrollSpriteDistance
+    beq +
+    dec .vSinScrollSpriteDistance
+    rts
++   lda #.cSinScrollSpriteDistance
+    sta .vSinScrollSpriteDistance
+
+.wSinScrollSourceChar = *+1
+    ldy .pSinScrollText
+    beq .SinScrollSkip
+    cpy #cEOT
+    beq .SinScrollEOT
+    jsr MakeNewSpriteActorX
+    beq .SpawnSpriteSinScrollFail
+    tya
+    and #$3F
+    clc
+    adc #((pSpriteDataBasePtr>>6)&$FF)-1
+    sta pAnimDatIcon,x
+.vSpawnSpriteSinScrollCFlags = *+1
+    lda #$13
+    cpy #$40
+    bcc +
+    ora #cSpriteCFlagFire
++   sta pAnimDatCFlags,x
+.vSpawnSpriteSinScrollXHi = *+1
+    lda #>.cSpawnSpriteSinScrollX
+    sta pAnimDatXPosHi,x
+.vSpawnSpriteSinScrollXLo = *+1
+    lda #<.cSpawnSpriteSinScrollX
+    sta pAnimDatXPos,x
+.vSpawnSpriteSinScrollY = *+1
+    lda #.cSpawnSpriteSinScrollY
+    sta pAnimDatYPos,x
+.vSpawnSpriteSinScrollDX = *+1
+    lda #.cSpawnSpriteSinScrollDX
+    sta pAnimDatDX,x
+.vSpawnSpriteSinScrollDY = *+1
+    lda #0
+    sta pAnimDatDY,x
+.vSpawnSpriteSinScrollYTabHi = *+1
+    lda #>pSinDiffAmp64Len128
+    sta pAnimDatYTabHi,x
+.vSpawnSpriteSinScrollYTabLo = *+1
+    lda #0
+    sta pAnimDatYTabLo,x
+.vSpawnSpriteSinScrollXTabHi = *+1
+    lda #0
+    sta pAnimDatXTabHi,x
+.vSpawnSpriteSinScrollXTabLo = *+1
+    lda #0
+    sta pAnimDatXTabLo,x
+.vSpawnSpriteSinScrollWait = *+1
+    lda #0
+    sta pAnimDatWait,x
+.vSpawnSpriteSinScrollNextCmd = *+1
+    lda #0
+    sta pAnimDatNextCmd,x
+
+.SinScrollSkip:
+.SinScrollAdvanceOneChar:
+    inc .wSinScrollSourceChar
+    bne +
+    inc .wSinScrollSourceChar+1
++
+.pSpawnYTab2Lo = *+1
+    ldy #0
+    inc .pSpawnYTab2Lo
+    lda pSinDiffAmp64Len64,y
+    clc
+    adc .vSpawnSpriteSinScrollY
+    sta .vSpawnSpriteSinScrollY
+    ldy .vSpawnSpriteSinScrollYTabLo
+    iny : iny
+    sty .vSpawnSpriteSinScrollYTabLo
+
+    rts
+	
+	
+	
+	
+	

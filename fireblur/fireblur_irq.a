@@ -1,0 +1,117 @@
+!cpu 6510
+
+!zone FIREBLUR_IRQ
+
+.cSelectCharSet = (>pcCharSet >> 2) & $0E
+.cPg0 = ((>pcTextPage0 << 2) & $F0) | .cSelectCharSet
+.cPg1 = ((>pcTextPage1 << 2) & $F0) | .cSelectCharSet
+.cPg2 = ((>pcTextPage2 << 2) & $F0) | .cSelectCharSet
+.cPg3 = ((>pcTextPage3 << 2) & $F0) | .cSelectCharSet    
+
+.cSb0 = >(pcTextPage0 + 1000)
+.cSb1 = >(pcTextPage1 + 1000)
+.cSb2 = >(pcTextPage2 + 1000)
+.cSb3 = >(pcTextPage3 + 1000)
+
+.pScreenTabRamP:            !byte .cPg0,.cPg3,.cPg0,.cPg1,.cPg0,.cPg1,.cPg2,.cPg1,.cPg2,.cPg3,.cPg2,.cPg3
+.pScreenTabXctl:            !byte   $12,  $12,  $12,  $14,  $12,  $14,  $14,  $14,  $14,  $12,  $14,  $12
+.pScreenTabYctl:            !byte   $15,  $10,  $14,  $13,  $12,  $11,  $15,  $10,  $14,  $13,  $12,  $11
+.pScreenTabSpriteBaseHi:    !byte .cSb0,.cSb3,.cSb0,.cSb1,.cSb0,.cSb1,.cSb2,.cSb1,.cSb2,.cSb3,.cSb2,.cSb3
+.pScreenTabCalcTextScreen:  !byte     2,    2,    2,    3,    3,    3,    0,    0,    0,    1,    1,    1
+
+.pDisplaySpriteNextFrameIndex: !byte 1,2,3,4,5,6,7,0
+.pDisplaySpriteNextFrame:  !byte 1<<5,2<<5,3<<5,4<<5,5<<5,6<<5,7<<5,0<<5
+
+.cStartingDisplaySpriteFrameIndex = 7;
+
+SetupFireBlurInterrupt:
+    lda #2
+    sta vScreenBlurCalc         ; -> 2 at first Frame, no update of zvScreenBlitSpriteFrame  
+    lda #6 * cMaxSprite
+    sta zvScreenBlitSpriteFrame   ; -> 6x at first Frame
+    sta zvSpriteAnimateFrontFrame; -> 6x at first Frame, no Animation needed
+
+    sei
+
+	lda #$01
+	sta vic_irqmask	    ; Turn on raster interrupts
+    
+	lda #<.NextFrameIRQ ; low part of address of interrupt handler code
+	sta cpu_irq	        ; store in interrupt vector
+	lda #>.NextFrameIRQ ; high part of address of interrupt handler code
+	sta cpu_irq+1       ; store in interrupt vector
+
+	lda #$FF
+	sta vic_line
+    lda .pScreenTabYctl
+    sta vic_controlv
+    
+    asl vic_irq         ; ACK VIC interrupts
+
+    cli
+    rts
+   
+    
+IrqScheduleNextFrame:
+	lda #<.NextFrameIRQ     ; low part of address of interrupt handler code
+	sta cpu_irq	            ; store in interrupt vector
+	lda #>.NextFrameIRQ     ; high part of address of interrupt handler code
+	sta cpu_irq+1           ; store in interrupt vector
+
+	lda #$FF
+	sta vic_line
+	
+;    lda #0
+;    sta vic_cborder
+    
+	; return from interrupt: enable ne
+	pla:tay:pla:tax:pla ; restore all registers
+	asl vic_irq			; enable next interrupt	
+            
+	rti    
+
+.NextFrameIRQ:
+	pha:txa:pha:tya:pha     ; 13T Save Registers on stack
+
+!if (STANDALONE = 0) {
+    jsr $1003
+}    
+    
+;    lda #4
+;    sta vic_cborder
+    
+;RasterIrq after screenend. $FF maybe?
+.DisplayNextPage:
+.vDisplayPage = *+1
+    ; FireFrame->x
+    ldx #$FF
+    inx
+    cpx #12
+    bne +
+    ldx #0
++   stx .vDisplayPage
+    lda .pScreenTabRamP,x
+    sta vic_ram
+    lda .pScreenTabYctl,x
+    sta vic_controlv
+    lda .pScreenTabXctl,x
+    sta vic_controlh
+    lda .pScreenTabCalcTextScreen,x
+    cmp vScreenBlurCalc
+    beq +
+    sta vScreenBlurCalc
+    lda zvScreenBlitSpriteFrame
+    clc
+    adc #(cMaxSprite * 3)
+    sta zvScreenBlitSpriteFrame    
++   lda .pScreenTabSpriteBaseHi,x
+    sta vSpriteBaseHi
+    ; SpriteFrame->x
+.vDisplaySpriteFrameIndex = *+1    
+    ldx #.cStartingDisplaySpriteFrameIndex
+    lda .pDisplaySpriteNextFrameIndex,x
+    sta .vDisplaySpriteFrameIndex
+    lda .pDisplaySpriteNextFrame,x
+    sta zvDisplaySpriteFrame
+    
+    jmp SpriteMultiplexerRun

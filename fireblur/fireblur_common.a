@@ -1,0 +1,152 @@
+!cpu 6510
+
+;; Memory map:
+;
+;   256b * 64 Symbol data       : 16k
+;   blur code                   : >5.6k
+;   blur tables                 : 1k               
+;   Symbol blit tables          : 1k
+;   build data-code (reuseable) : ~1k? (build sprites, build charset, build blurtables)
+;   sound                       : 4k?   $1000-$2000
+;   sprite data: x, y, xhi, exp, col, dat, spr#
+;                               : 1,75k
+;
+;
+; VIC-PAGE:
+;   64b * 64 Sprite data        : 4k
+;   4 Text Screens              : 4k
+;   1 Charset                   : 2k
+;
+;   Testrechnung: Vic Page 3 verwenden (C000-FFFF) Blockiert: D000-DFFF und das Ende von FFF0
+;   Als erstes die SpriteDaten, damit sie mit dem (ebenfalls geladenen) Code zusammenliegen : 64b * 64 = 4k
+;   Sprites:        D000 - D7FF (32 sprites)
+;   Charset:        D800 - DFFF (2k)
+;   BlurMask-Tables:E000 - E3FF (1k)
+;   4 Text screens: E400 - F3FF (4*1k)
+;   Sprite+Animation Status: F400 - FD28
+;   Global Variables kann man dann noch ab FFC0 ablegen
+;
+;   
+    
+;; Timing:    
+;    
+;   8 Sprite slots, 12 Screen positions, 4 Blur screens    
+;
+;   Frame:      abcdefghijkl    
+;   Screen:     030101212323    
+;                     -         Start blur for Screen0, 
+;                                animate Spritepos 234, 
+;                                draw blursprites for Screen 0,
+;                                wait for frame+3
+;   Spritepos:  012345670123 
+;               456701234567    
+
+;; ZEROPAGE
+cMaxSprite = 32
+
+pSortTable         = $10         ; cMaxSprite+1(=33)b, muss in der ZeroPage liegen. Letzter Eintrag $FF
+zvSpriteIrqMask    = pSortTable + cMaxSprite + 1
+zvSpriteIrqExp     = pSortTable + cMaxSprite + 2
+zvSpriteIrqMsbX    = pSortTable + cMaxSprite + 3
+zvNextIrqLine      = pSortTable + cMaxSprite + 4
+zvNextUnusedSprite = pSortTable + cMaxSprite + 5
+zvNextInsertSprite = pSortTable + cMaxSprite + 6
+
+zpHwSpriteBlock    = pSortTable + cMaxSprite + 7     ; until which line is the Hw-Sprite used? (8b)
+zpGlobalsStart = zpHwSpriteBlock + 8  
+
+zvSpriteAnimateFrontFrame = zpGlobalsStart      ; Newest Animation frame
+zvDisplaySpriteFrame      = zpGlobalsStart+1    ; currently displayed sprite frame
+zvScreenBlitSpriteFrame   = zpGlobalsStart+2    ; Animation frame for Blit Sprites, maintained by Irq
+
+.cGlobalVars = $FFC0
+
+vSpriteBaseHi            = .cGlobalVars+0  ; Currently displayed Screen Ram Hi +3
+vExitBlurLoop            = .cGlobalVars+1  ; 0 as long as Blurloop Shall continue
+vScreenBlurCalc          = .cGlobalVars+2  ; TextScreen Index to calculate Blur for (0-3)
+
+pcTextPagesStart = $E400
+pcTextPage0 = pcTextPagesStart
+pcTextPage1 = pcTextPagesStart + $400
+pcTextPage2 = pcTextPagesStart + $800
+pcTextPage3 = pcTextPagesStart + $C00
+
+cSpriteAndAnimationDataStart = $F400
+.cSpriteDataBase = cSpriteAndAnimationDataStart
+pSpriteYPos     = .cSpriteDataBase + $000       ; Y-Spritepositions
+pSpriteXPos     = .cSpriteDataBase + $100       ; X-Spritepositions LoByte
+pSpriteXPosHi   = .cSpriteDataBase + $200       ; X-Spritepositions HiByte
+pSpriteIcon     = .cSpriteDataBase + $300       ; Sprite-Datenzeiger für SpriteDaten (Spriteindex), CharData wird daraus berechnet
+pSpriteCFlag    = .cSpriteDataBase + $400       ; SpriteFarbe und -Flags : Exp-Fire-Active-???-Col-Col-Col-Col
+
+pAnimationDataBase = cSpriteAndAnimationDataStart+$500
+pAnimDatXTabHi  = pAnimationDataBase + $000
+pAnimDatXTabLo  = pAnimationDataBase + $020
+pAnimDatDX      = pAnimationDataBase + $040
+pAnimDatYTabHi  = pAnimationDataBase + $060
+pAnimDatYTabLo  = pAnimationDataBase + $080
+pAnimDatDY      = pAnimationDataBase + $0A0
+pAnimDatWait    = pAnimationDataBase + $0C0
+pAnimDatNextCmd = pAnimationDataBase + $0E0
+pAnimDatYPos    = pAnimationDataBase + $100       ; Y-Spritepositions
+pAnimDatXPos    = pAnimationDataBase + $120       ; X-Spritepositions LoByte
+pAnimDatXPosHi  = pAnimationDataBase + $140       ; X-Spritepositions HiByte
+pAnimDatCFlags  = pAnimationDataBase + $180       ; SpriteFarbe und -Flags : Exp-Fire-???-Active-Col-Col-Col-Col
+pAnimDatIcon    = pAnimationDataBase + $160       ; Sprite-Datenzeiger für SpriteDaten (Spriteindex), CharData wird daraus berechnet
+pAnimDatHandle  = pAnimationDataBase + $1A0       ; Handle/Group-Info for Sprite Actor
+pSpriteHandles  = pAnimationDataBase + $1C0       ; For Grouping Sprites, use 4 Groups with 16 slots each -> 64b
+cSpriteAndAnimationDataEnd = pAnimationDataBase + $200
+
+pMovementTableSpace1 = $FC00
+pMovementTableSpace2 = $FD00
+pMovementTableSpace3 = $FE00
+
+cSpriteCFlagExp    = %10000000
+cSpriteCFlagFire   = %01000000
+cSpriteCFlagActive = %00010000      ; Inactive Actors have ALL bits cleared
+cSpriteCFlagColor  = %00001111
+
+pUnusedSpritesQueue     = $FF00     ; Unused Sprite Actors (cMaxSprite bytes) -> $FF1F
+
+pBlurMaskLeft   = $E000
+pBlurMaskRight  = $E100
+pBlurMaskTop    = $E200
+pBlurMaskBottom = $E300
+
+pcCharSet = $D800 ; - $E000
+pSpriteDataBasePtr = $D000      ; Start der ersten SpriteDaten, für die Chars berechnet werden sollen (Lo muss $00 sein)
+cSpriteFirstIndex = <(pSpriteDataBasePtr >> 6) ; der liegt bei 64
+
+cMaskTop = %00001111
+cMaskBottom = %11110000
+cMaskLeft = %00110011
+cMaskRight = %11001100
+
+cSpriteCount = 32               ; Anzahl der Sprites, für die Chars berechnet werden sollen
+pSpriteCharDataBasePtr = $B000  ; Platz für Char-Daten (benötigt SpriteCount*256 bytes)
+cSpriteCharDataTransform = (>pSpriteCharDataBasePtr) - cSpriteFirstIndex;
+
+cEOT = $FF
+
+pSinDiffAmp64Len64 = pMovementTableSpace1
+pSinDiffAmp32Len128 = pMovementTableSpace2
+pSinDiffAmp64Len128 = pMovementTableSpace3
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

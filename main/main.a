@@ -1,0 +1,99 @@
+STANDALONE = 2
+MODULE_START = 0
+!src "common.a"
+
+    ldx #<LAST_PACKED_PART_END
+    ldy #>LAST_PACKED_PART_END
+    jsr EXOMIZER_DECRUNCH_BASE_XY
+    ldx #cDC_RUN_NEXT
+    stx DEMO_COMMAND_FLAG
+    jsr $1000
+
+.RunNextPart:
+.nextPartOffset = *+1
+    ldx #(.cPartCount << 1)
+    beq .EndOfDemo
+    dex
+    lda .pPartStart,x
+    sta .indirectJSR+2
+    dex
+    lda .pPartStart,x
+    sta .indirectJSR+1
+    stx .nextPartOffset
+    lda #0
+    sta .vNextPartAlreadyUnpacked
+
+.WaitPrevPartEnd:
+    lda DEMO_COMMAND_FLAG
+    beq .WaitPrevPartEnd
+    ldx #0
+    stx DEMO_COMMAND_FLAG
+    cmp #cDC_RUN_0400
+    bne +
+    jsr $0400
+    jmp .WaitPrevPartEnd
++   cmp #cDC_UNPACK_NEXT
+    bne +
+.vNextPartAlreadyUnpacked = *+1
+    lda #0
+    bne .WaitPrevPartEnd
+-   jsr EXOMIZER_DECRUNCH
+    inc .vNextPartAlreadyUnpacked
+    lda DEMO_COMMAND_FLAG
++   cmp #cDC_RUN_NEXT
+    bne .WaitPrevPartEnd
+    lda .vNextPartAlreadyUnpacked
+    bne +
+    jsr EXOMIZER_DECRUNCH
+.indirectJSR:
++   jsr $0000
+    jmp .RunNextPart
+
+.EndOfDemo:
+    lda #0
+    beq .EndOfDemo
+    rts
+
+
+EXOMIZER_LITERAL_SEQUENCES_NOT_USED = 1
+EXOMIZER_MAX_SEQUENCE_LENGTH_256 = 1
+EXOMIZER_DECRUNCH_TABLE = $0320     ;Somewhere in the Tape input buffer
+EXOMIZER_get_crunched_byte:
+    lda .opbase + 1
+    bne +
+    dec .opbase + 2
++   dec .opbase + 1
+    ;; change the $ffff to point to the byte immediately following the last
+    ;; byte of the crunched file data (mem command)
+.opbase:
+    lda $ffff
+    rts
+
+; Wrapper: put (PackedFile+Size) Lo in X, Hi in Y
+EXOMIZER_DECRUNCH_BASE_XY:
+    stx .opbase+1
+    sty .opbase+2
+    rts
+
+!src "exodecrunch2.a"
+
+!warn "Main End: ", *
+
+.cPartCount = 4
+;.pPartStart: !word PART_SCROLLER_BASE, PART_SCREENDROP_BASE
+.pPartStart: !word PART_FIREBLUR_BASE, PART_PICSCROLL_BASE, PART_SCROLLER_BASE, PART_SCREENDROP_BASE
+
+*= $1000
+!bin "fegolhuzz-demo_X2018.sid",,$7E
+!warn "music end: ",*    
+
+FIRST_PACKED_PART_START = *
+    !bin "..\fireblur\fireblur.exo",,2
+!warn "fireblur end: ",*    
+    !bin "..\picscroll\picscroll.exo",,2
+!warn "picscroll end: ",*    
+    !bin "..\scroller\scroller.exo",,2
+!warn "scroller end: ",*    
+    !bin "..\screendrop\screendrop.exo",,2
+!warn "screendrop end: ",*    
+LAST_PACKED_PART_END = *

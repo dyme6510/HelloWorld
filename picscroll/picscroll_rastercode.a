@@ -1,0 +1,183 @@
+
+;; Zeropage                     
+zpIrqRestoreA = $10
+zpIrqRestoreX = $11
+zpIrqRestoreY = $12
+zpNextSpriteDataOffset = $13
+zpNextSpriteDataOffset2 = $14
+zpSpriteSinTableOffset = $15
+zpSpriteSinTableOffset2 = $16
+
+
+!macro NextSpriteIrq .I, .IPrev, .NextFunc{
+.IsOdd = ((.I>>1) & 1)
+
+    sta zpIrqRestoreA               ; 3     2b ; longer but faster than pha/pla
+    stx zpIrqRestoreX               ; 3     2b       _6     _4b
+    
+    lda #<.NextFunc                 ; 2     2b
+    sta cpu_irq                     ; 4     3b
+    lda #>.NextFunc                 ; 2     2b
+    sta cpu_irq+1                   ; 4     3b
+    asl vic_irq                     ; 6     3b      ; carry is SET
+    lda vic_ys0 + (.IPrev*2)        ; 4     3b
+    adc #5                          ; 2     2b      ; ->+6
+    cmp #248                        ; 2     2b    
+    bcc +                           ; 2     2b
+    jmp LastSpriteReached           ; 3     3b   
++   sta vic_ys0 + (.I*2)            ; 4     3b
+    sta vic_ys4 + (.I*2)            ; 4     3b
+    adc #3                          ; 2     2b
+    sta vic_line                    ; 4     3b       _45    _36b
+
+    adc zpSpriteSinTableOffset+.IsOdd ; 3     2b
+    tax                             ; 2     1b
+    lda pSpriteSinTableX,x          ; 4     3b
+    sta vic_xs4 + (.I*2)            ; 4     3b
+    eor #$FF                        ; 2     2b
+    clc                             ; 1     1b
+    adc #88                         ; 2     2b
+    sta vic_xs0 + (.I*2)            ; 4     3b       _22    _17b     __57b
+    
+    ldx zpNextSpriteDataOffset+.IsOdd      ; 3     2b
+    inc zpNextSpriteDataOffset+.IsOdd      ; 5     2b    
+    lda pSpriteData1,x              ; 4     3b
+    sta pGfxTextPage0+1016+.I       ; 4     3b  ; offset HI: 66b
+    lda pSpriteData2,x              ; 4     3b
+    sta pGfxTextPage0+1016+4+.I     ; 4     3b  ; offset HI: 72b
+
+    lda pSpriteColor1,x             ; 4     3b
+    sta vic_cs0+.I                  ; 4     3b           
+    lda pSpriteColor2,x             ; 4     3b
+    sta vic_cs4+.I                  ; 4     3b       _40    _28b
+    
+    lda zpIrqRestoreA               ; 3     2b
+    ldx zpIrqRestoreX               ; 3     2b
+    rti                             ; 6     1b       _12    _5b
+                                    ;              __125   _81b
+}
+.cNextSpriteDataPtrOffset1 = 66
+.cNextSpriteDataPtrOffset2 = 72
+    
+; NextSpriteSequence:
+.NextSpriteIrq0:
+    +NextSpriteIrq 0,3, .NextSpriteIrq1
+.NextSpriteIrq1:
+    +NextSpriteIrq 2,0, .NextSpriteIrq2
+.NextSpriteIrq2:
+    +NextSpriteIrq 1,2, .NextSpriteIrq3
+.NextSpriteIrq3:
+    +NextSpriteIrq 3,1, .NextSpriteIrq0
+    
+pSpriteDataHi_0 = .NextSpriteIrq0+.cNextSpriteDataPtrOffset1
+pSpriteDataHi_1 = .NextSpriteIrq1+.cNextSpriteDataPtrOffset1
+pSpriteDataHi_2 = .NextSpriteIrq2+.cNextSpriteDataPtrOffset1
+pSpriteDataHi_3 = .NextSpriteIrq3+.cNextSpriteDataPtrOffset1
+pSpriteDataHi_4 = .NextSpriteIrq0+.cNextSpriteDataPtrOffset2
+pSpriteDataHi_5 = .NextSpriteIrq1+.cNextSpriteDataPtrOffset2
+pSpriteDataHi_6 = .NextSpriteIrq2+.cNextSpriteDataPtrOffset2
+pSpriteDataHi_7 = .NextSpriteIrq3+.cNextSpriteDataPtrOffset2
+
+.pNextSpriteIrqTableHi: !byte >.NextSpriteIrq0, >.NextSpriteIrq1, >.NextSpriteIrq2, >.NextSpriteIrq3
+.pNextSpriteIrqTableLo: !byte <.NextSpriteIrq0, <.NextSpriteIrq1, <.NextSpriteIrq2, <.NextSpriteIrq3
+
+.cSinTableScrollSpeed = -2
+.cTextScrollSpeed = 1
+.cTextFirstPos = 12
+
+LastSpriteReached:
+    sty zpIrqRestoreY               ; 3     2b       _6     _4b
+    jsr $1003
+    
+    lda zpSpriteSinTableOffset
+    adc #.cSinTableScrollSpeed
+    sta zpSpriteSinTableOffset
+	eor #$40
+    sta zpSpriteSinTableOffset2
+
+    sec
+    lda .vFirstSpriteYPos
+    sbc #.cTextScrollSpeed
+	tax
+    cmp #.cTextFirstPos
+    bcs ++
+    adc #6
+	tax
+	lda .vFirstSpriteIrq	
+	clc
+	adc #1
+	and #3
+	sta .vFirstSpriteIrq
+	and #1
+	beq +
+    inc .vFirstSpriteDataOffset1
+	bne ++
++   inc .vFirstSpriteDataOffset2
+++  stx .vFirstSpriteYPos 
+    
+    jsr ScheduleFirstSpriteIrq    
+    lda zpIrqRestoreA               ; 3
+    ldx zpIrqRestoreX               ; 3
+    ldy zpIrqRestoreY               ; 3
+    rti                             ; 6
+
+ScheduleFirstSpriteIrq:
+.vFirstSpriteDataOffset1 = *+1
+    lda #0
+    cmp #cScrollTextPosStartPicture
+    bcc +
+    jsr Scrol1OnePixelExport
+    lda .vFirstSpriteDataOffset1 
++   cmp #cScrollTextLen
+    bcs .EndPart    
+    sta zpNextSpriteDataOffset
+.vFirstSpriteDataOffset2 = *+1
+    lda #128
+    sta zpNextSpriteDataOffset2
+
+	lda #32
+	ldx #7
+-	sta pGfxTextPage0+1016,x	
+	sta pGfxTextPage1+1016,x
+	dex
+	bpl -
+
+    lda vic_controlv
+    and #$7F
+    sta vic_controlv    
+.vFirstSpriteYPos = *+1
+    lda #200
+    sta vic_ys0
+    sta vic_ys1
+    sta vic_ys2
+    sta vic_ys3
+    sta vic_ys4
+    sta vic_ys5
+    sta vic_ys6
+    sta vic_ys7	
+	sbc #4
+    sta vic_line	
+	
+.vFirstSpriteIrq = *+1
+	ldx #0
+    lda .pNextSpriteIrqTableLo,x
+    sta cpu_irq                     ; 4     3b
+    lda .pNextSpriteIrqTableHi,x
+    sta cpu_irq+1                   ; 4     3b
+    asl vic_irq    
+    rts
+    
+.EndPart:
+	; skip rts
+	pla : pla
+
+    ; disable gfx
+    lda vic_controlv
+    and #$EF
+    sta vic_controlv
+    +SignalRunNextPart
+    jsr JustMusicIrq
+    lda zpIrqRestoreA
+    ldx zpIrqRestoreX
+    ldy zpIrqRestoreY
+    rti

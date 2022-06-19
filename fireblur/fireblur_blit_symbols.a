@@ -1,0 +1,329 @@
+
+!zone FIREBLUR_BLIT_SYMBOLS
+
+
+; Symbole in exp-Sprite-Größe, um einen schönen Fireblur dahinter legen zu können
+; Sprites bewegen sich beliebig über den Bildschirm, zusätzlich gibts 4 Char-arrays (7*6 chars)
+; die das dargestellte Symbol ohne, mit 4px x-offset und mit 4px y-offset enthalten (und beides). Also Blur-Zeichengröße max 52x44
+
+; Eine weitere Herausforderung wird sein, dass das Rendern des Blur viele (und zwar variabel viele) Frames vor dem Anzeigen passiert
+; Der Blur muss also die Spriteposition bis zu 8 Frames vor dem Anzeigen haben
+;
+;
+; Sprite YPos, XPos und XPosHi haben für 32 Sprites und 8 Frames Einträge
+; -> jede Tabelle ist 256 Bytes lang, die obersten 3 Bit sind der FrameIndex
+
+!ZONE FIREBLUR_BLIT_SYMBOLS
+
+
+; Tables: (1kB)
+
+; tabYSrcOffExp
+; tabYSrcNumRowsExp
+; tabYCharScreenHi
+; tabYCharScreenLo
+; tabYSrcOffNExp
+; tabYSrcNumRowsNExp
+
+; tabXCharScreenOff
+; tabXSrcOffExp
+; tabXSrcNumColsExp
+; tabXSrcOffNExp
+; tabXSrcNumColsNExp
+
+;;1k tables    
+.Tables:
+
+; 64 bytes
+.tabYSrcOffExp:         ; nicht nur fürs clipping, auch die Bitmap immer abwechselnd
+    !byte 200, 216, 200, 216, 160, 176, 120, 136, 80, 96, 40, 56
+    !for .cVal, 12, 63{
+        !byte ((.cVal & 1) * 16)
+    }  
+
+; 64 bytes
+.tabYSrcNumRowsExp:     ; meistens 6, nur clipping
+    !byte 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5
+    !for .cVal, 12, 51{
+        !byte 6
+    }  
+    !byte 5, 5, 4, 4, 3, 3, 2, 2, 1, 1, 0, 0
+      
+; 64 bytes
+.tabYCharScreenHi:
+    !for .cVal, 0, 11{
+        !byte 0
+    }
+    !for .cVal, 12, 63{
+        !byte >(((.cVal-12) DIV 2) * 40)
+    }
+
+; 64 bytes
+.tabYCharScreenLo:
+    !for .cVal, 0, 11{
+        !byte 0
+    }
+    !for .cVal, 12, 63{
+        !byte <(((.cVal-12) DIV 2) * 40)
+    }
+    
+; 64 bytes
+.tabYSrcOffNExp:
+    !byte 112, 232, 112, 232, 112, 232, 112, 232, 72, 192, 32, 152
+    !for .cVal, 12, 63{
+        !byte 32 + ((.cVal & 1) * 120)
+    }  
+
+; 64 bytes
+.tabYSrcNumRowsNExp:
+    !byte 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2, 2
+    !for .cVal, 12, 51{
+        !byte 3
+    }  
+    !byte 2, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0
+
+
+; 128 bytes
+.tabXCharScreenOff:
+    !for .cVal, 0, 5{
+        !byte 0
+    }
+    !for .cVal, 6, 87{
+        !byte ((.cVal-6) DIV 2)
+    }
+    !for .cVal, 88, 127{
+        !byte 0
+    }
+
+; 128 bytes
+.tabXSrcOffExp:
+    !byte 3, 11, 2, 10, 1, 9
+    !for .cVal, 6, 117{
+        !byte 0 + ((.cVal & 1) * 8)
+    }  
+    !byte 7, 15, 6, 14, 5, 13, 4, 12, 3, 11
+
+; 128 bytes
+.tabXSrcNumColsJumpOffsetExp:
+    !byte 3, 4, 4, 5, 5, 6
+    !for .cVal, 6, 73{
+        !byte 6 + (.cVal & 1)
+    }
+    !byte 6, 6, 5, 5, 4, 4, 3, 3, 2, 2, 1, 1
+    !for .cVal, 86, 117{
+        !byte 0
+    }
+    !byte 0, 0, 0, 1, 1, 2, 2, 3, 3, 3
+
+; 128 bytes
+.tabXSrcOffNExp:        ; Die BaseOffsets (32) sind schon in YOff drin
+    !byte 3, 7, 2, 6, 1, 5
+    !for .cVal, 6, 127{
+        !byte 0 + ((.cVal & 1) * 4)
+    }  
+
+; 128 bytes
+.tabXSrcNumColsJumpOffsetNExp:
+    !byte 0, 1, 1, 2, 2, 3
+    !for .cVal, 6, 79{
+        !byte 3 + (.cVal & 1)
+    }  
+    !byte 3, 3, 2, 2, 1, 1
+    !for .cVal, 86, 127{
+        !byte 0
+    }
+
+.tabCountColsToJumpOffset:
+    !byte 0                     ;; 0 Rows: do not loop at all
+    !for .cVal, 1, 7{
+        !byte -(5 + .cVal * 7);
+    }
+
+.tabRowStart40: ; row#1:0 row#2:40, ...
+    !byte 0
+    !for .cVal, 0, 6{
+        !byte .cVal * 40
+    }
+    
+    
+; USED VARIABLES:
+; pCurrentBlitCharPageHi : Hi of destination screen address
+; SpriteExpanded[#]: Table with expanded-Flag (only X AND Y expanded or none)
+; SpriteXPos[#], SpriteXPosHi[#] : 9Bit X-Position
+; SpriteYPos[#] : 8Bit Y-Position. -1: Invisible/Disabled
+; SpriteBaseCharDataHi[#]: Hi of CharData for Sprite
+
+
+; pCurrentBlitCharPageHi Muss gesetzt sein, SpriteNummer ist in X
+.zpDst = $E0
+.zpSrc = $E2
+.zpYForSourcePtr = $E2 ; only used when zpSrc isn't
+
+
+InitBlitSpriteTables:
+    ; JumpOffset-Tables anpassen
+    ldx #128
+-   ldy .tabXSrcNumColsJumpOffsetExp,x
+    beq +
+    lda .tabCountColsToJumpOffset,y
+    sta .tabXSrcNumColsJumpOffsetExp,x
++   ldy .tabXSrcNumColsJumpOffsetNExp,x
+    beq +
+    lda .tabCountColsToJumpOffset,y
+    sta .tabXSrcNumColsJumpOffsetNExp,x
++   dex
+    bpl -
+    rts
+
+.pCurrentBlitTextPageHi: !byte >pcTextPage0, >pcTextPage1, >pcTextPage2, >pcTextPage3  
+    
+BlitSpriteInitFrame:     ; X: FrameIndex
+    lda .pCurrentBlitTextPageHi, x
+    sta .frameTextPageHi
+    
+.BlitSpriteFireEnd:
+    rts
+    
+BlitSpriteFire: ; X: SpriteIndex (incl. frame)
+    lda pSpriteCFlag, x             ; 4
+    and #cSpriteCFlagFire           ; 2
+    beq .BlitSpriteFireEnd          ; 2/3
+
+    ;; Y auswerten
+    lda pSpriteYPos, x              ; 4
+    beq .BlitSpriteFireEnd          ; 2/3
+    cmp #250                        ; 2 ; A >= 250 ? invisible, skip.
+    bcs .BlitSpriteFireEnd          ; 2/3
+    lsr : lsr                       ; 4
+    tay                             ; 2
+    
+    ;; zpDst setzen
+    clc                             ; 2
+    lda .tabYCharScreenHi, y        ; 4
+.frameTextPageHi = *+1
+    adc #0                          ; 2
+    sta .zpDst+1                    ; 3
+    lda .tabYCharScreenLo, y        ; 4
+    sta .zpDst                      ; 3    
+    sty .zpYForSourcePtr            ; 3     __39
+        
+    ;; X auswerten
+    lda pSpriteXPos, x              ; 4
+    ldy pSpriteXPosHi, x            ; 4
+    cpy #1                          ; 2 will set carry if XHi >= 1
+    ror : lsr                       ; 4
+    tay                             ; 2
+    ;; zpDst anpassen
+    clc                             ; 2
+    lda .tabXCharScreenOff, y       ; 4
+    adc .zpDst                      ; 3
+    bcc +                           ; 3/7
+    inc .zpDst+1                    ; 2
+    clc                             ; 2
++   sta .zpDst                      ; 3     __37
+
+    ;; BaseCharPtr holen
+    lda pSpriteIcon, x              ; 4
+    adc #cSpriteCharDataTransform   ; 2
+    clc
+    sta .zpSrc+1                    ; 3
+    
+    lda pSpriteCFlag, x             ; 4     __13 -> __89
+    bpl .IsNotExpanded              ; 2/3
+        
+.IsExpanded    ; X: Sprite#, Y: X/4
+    lda .tabXSrcNumColsJumpOffsetExp, y ; 4    
+    sta .BlitMainRelativeLoopStart  ; 4    
+    lda .tabXSrcOffExp, y           ; 4
+    ldy .zpYForSourcePtr            ; 3
+    adc .tabYSrcOffExp, y           ; 4
+    sta .zpSrc                      ; 3
+    ldx .tabYSrcNumRowsExp, y       ; 4
+    jmp .BlitMainEnter              ; 3    __29 (+89, +9 to Loop)     __127 to .WholeLoop + ((18*Columns)+7) * Rows     SUM(7*6) : 925
+
+    ;; zpSrc anpassen : SprX/4 is in Y
+.IsNotExpanded
+    lda .tabXSrcNumColsJumpOffsetNExp, y ; 4    
+    sta .BlitMainRelativeLoopStart  ; 4 
+    lda .tabXSrcOffNExp, y          ; 4
+    ldy .zpYForSourcePtr            ; 3
+    adc .tabYSrcOffNExp, y          ; 4
+    sta .zpSrc                      ; 3    
+    ldx .tabYSrcNumRowsNExp, y      ; 4
+    jmp .BlitMainEnter              ; 3    __29 (+90, +9 to Loop)     __128 to .WholeLoop + ((18*Columns)+7) * Rows     SUM(4*3) : 365
+    
+.WholeLoop:
+    lda (.zpSrc),y      ; 5*
+    ora (.zpDst),y      ; 5*
+    sta (.zpDst),y      ; 6
+    iny                 ; 2
+    lda (.zpSrc),y
+    ora (.zpDst),y
+    sta (.zpDst),y
+    iny
+    lda (.zpSrc),y
+    ora (.zpDst),y
+    sta (.zpDst),y
+    iny
+    lda (.zpSrc),y
+    ora (.zpDst),y
+    sta (.zpDst),y
+    iny
+    lda (.zpSrc),y
+    ora (.zpDst),y
+    sta (.zpDst),y
+    iny
+    lda (.zpSrc),y
+    ora (.zpDst),y
+    sta (.zpDst),y
+    iny
+    lda (.zpSrc),y
+    ora (.zpDst),y
+    sta (.zpDst),y
+    iny
+    lda (.zpSrc),y
+    ora (.zpDst),y
+    sta (.zpDst),y
+    
+.BlitMainEnter:   
+    ldy .tabRowStart40,x        ; 4
+    dex                         ; 2
+.BlitMainRelativeLoopStart = *+1  
+    bpl .WholeLoop              ; 3
+    rts                         ; 6    ; __368 for 4*3, __928 for 7*6  (incl rts)
+    
+.cDecayIncrement = 227
+DecayFire:    
+    lda #0                      ; 2
+    sta .zpDst                  ; 3
+    lda .frameTextPageHi        ; 4
+    sta .zpDst+1                ; 3
+    ldx #4                      ; 2
+.vLastLoByte = *+1
+    ldy #0                      ; 2
+.DecayFireLoop:                           ; __16
+    lda (.zpDst),y              ; 5
+    cmp #%11111111              ; 2
+    beq .doDecay                ; 2/3
++   cmp #%10101010              ; 2
+    beq .doDecay                ; 2/3
++   cmp #%01010101              ; 2
+    bne .DecayFireNext          ; 3/2
+.doDecay:
+    sbc #1                      ; 2
+    sta (.zpDst),y              ; 6
+.DecayFireNext:                           ;  __18/18/22/25
+    clc                         ; 2
+    tya                         ; 2
+    adc #.cDecayIncrement       ; 2
+    tay                         ; 2
+    bcc .DecayFireLoop          ; 3/2
+    dex                         ; 2
+    beq +                       ; 3/2
+    inc .zpDst+1                ; 5
+    bne .DecayFireLoop          ; 3 always taken
++   sty .vLastLoByte            ; 4
+    rts                         ; 6
+    
+    
+    

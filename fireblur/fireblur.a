@@ -1,0 +1,123 @@
+STANDALONE = 0
+
+!if (STANDALONE != 0) {
+    MODULE_START = $1100
+} else {
+    MODULE_START = $8000
+}
+!src "../main/common.a"
+
+!src "fireblur_common.a"
+
+pcCodeStart = *
+pcCodeExtStart = *
+    jmp Main
+    
+pcBuildSpritesCodeStart = *
+!src "fireblur_build_sprites.a"
+pcBuildSpritesCodeEnd = *
+!warn "BuildSpritesCode: @", pcBuildSpritesCodeStart, " Size:",(pcBuildSpritesCodeEnd - pcBuildSpritesCodeStart)
+
+pcInitCodeStart = *
+!src "fireblur_init.a"
+pcInitCodeEnd = *
+!warn "InitCode: @", pcInitCodeStart, " Size:",(pcInitCodeEnd - pcInitCodeStart)
+
+cCodePart1Size = * - pcCodeExtStart;
+
+pcBlitCodeStart = *
+!src "fireblur_blit_symbols.a"
+pcBlitCodeEnd = *
+!warn "BlitCode: @",pcBlitCodeStart, " Size:",(pcBlitCodeEnd - pcBlitCodeStart)
+
+pcAnimateStart = *
+!src "fireblur_animate_sprites.a"
+pcAnimateEnd = *
+!warn "AnimateCode: @",pcAnimateStart, " Size:",(pcAnimateEnd - pcAnimateStart)
+    
+pcBlurCodeStart = *
+!src "fireblur_blurcode.a"
+pcBlurCodeEnd = *
+!warn "BlurCode: @", pcBlurCodeStart, " Size:",(pcBlurCodeEnd - pcBlurCodeStart)
+
+pcIrqSpriteMultiplexStart = *
+!src "fireblur_sprite_multiplex.a"
+pcIrqSpriteMultiplexEnd = *
+!warn "SpriteMultiplex: @", pcIrqSpriteMultiplexStart, " Size:",(pcIrqSpriteMultiplexEnd - pcIrqSpriteMultiplexStart)
+
+pcIrqCodeStart = *
+!src "fireblur_irq.a"
+pcIrqCodeEnd = *
+!warn "IrqCode: @", pcIrqCodeStart, " Size:",(pcIrqCodeEnd - pcIrqCodeStart)
+
+cCodePart2Size = * - pcCodeStart;
+
+!ZONE FIREBLUR_MAIN
+
+
+
+.cSelectCharSet = (>pcCharSet >> 2) & $0E
+
+.cBlurColor0 = viccolor_BLACK
+.cBlurColor1 = viccolor_ORANGE
+.cBlurColor2 = viccolor_YELLOW
+.cBlurColor3 = viccolor_WHITE
+
+Main:
+    jsr FireBlurInit
+    
+    lda #0
+    sta vExitBlurLoop
+    lda #(1 * cMaxSprite)
+    sta zvSpriteAnimateFrontFrame    
+    
+    ;;TEST  
+    jsr .SetupTestDataSprites    
+
+    jsr SetupFireBlurInterrupt
+    jsr BlurMainLoop
+    rts
+
+
+    
+.cTestSpriteCount = 4
+.pTestSpriteY:     !byte  92,  92,  92,  92
+.pTestSpriteX:     !byte  46, 122, 198,  18
+.pTestSpriteMsbX:  !byte   0,   0,   0,   1
+.pTestSpriteIcon:  !byte   3,  24,  12,   4
+.pTestSpriteCFlag: !byte $D2, $D2, $D2, $D2
+.pTestSpriteCmd:   !byte   1,   1,   1,   1
+
+.SetupTestDataSprites:    
+    clc
+-   jsr MakeNewSpriteActorX
+.vTestSpriteIndex = *+1    
+    ldy #.cTestSpriteCount-1
+    lda .pTestSpriteY,y
+    sta pAnimDatYPos, x
+    lda .pTestSpriteX,y
+    sta pAnimDatXPos,x
+    lda .pTestSpriteMsbX,y
+    sta pAnimDatXPosHi,x    
+    lda pAnimDatCFlags,x
+    ora .pTestSpriteCFlag,y
+    sta pAnimDatCFlags,x    
+    lda .pTestSpriteIcon,y
+    adc #cSpriteFirstIndex
+    sta pAnimDatIcon,x  
+    lda .pTestSpriteCmd,y    
+    sta pAnimDatNextCmd,x
+    
+    lda #>pSinDiffAmp32Len128
+    sta pAnimDatYTabHi,x
+    
+    dec .vTestSpriteIndex
+    bpl -
+    
+    lda #$FF
+    sta vic_sactive
+    rts
+    
+pcCodeEnd = *
+!warn "Complete Code: @", pcCodeStart, " - ",pcCodeEnd," Size:",(pcCodeEnd - pcCodeStart)
+    

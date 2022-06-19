@@ -1,0 +1,28 @@
+
+!macro SetJmpDst .JmpAddr, .JmpDst{
+	ldx #<.JmpDst
+	stx .JmpAddr+1
+	ldx #>.JmpDst
+	stx .JmpAddr+2    
+}
+
+!macro SetJmpDst .JmpAddr, .JmpDst, .JmpDstPrev{
+    !if (<.JmpDst != <.JmpDstPrev){
+        ldx #<.JmpDst
+        stx .JmpAddr+1
+    }
+    !if (>.JmpDst != >.JmpDstPrev){
+        ldx #>.JmpDst
+        stx .JmpAddr+2    
+    }
+}
+
+!macro SetJmpDstReturn .JmpAddr, .JmpDst{
+	+SetJmpDst .JmpAddr, .JmpDst
+    jmp .JmpAddr+3
+}
+
+!macro SetJmpDstReturn .JmpAddr, .JmpDst, .JmpDstPrev{
+	+SetJmpDst .JmpAddr, .JmpDst, .JmpDstPrev
+    jmp .JmpAddr+3
+}

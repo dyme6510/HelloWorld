@@ -1,0 +1,250 @@
+
+
+;; Scroller:
+;; Move Screen 2 rows down, fill first and second row with new data
+;; For moving down, each Char is marked in a "does not need to be copied"-map if its the same values 2 rows up
+;;
+;; data is held in 2 alternating buffers, each 2560b (8 char lines) bitmap data, 320b color, 320b mask = 3200b unpacked data...?
+;;  
+;; Unpack Data in Chunks of 6 character lines : 1920b Bitmap, 240b colors, 240b mask -> 2400b
+;; Problem: we need the last 4 chunks of mask in memory at all times, but only the latest bitmap and color chunk
+;; 6 complete chunks->15k
+;; OR copy mask separately, keep only 2 unpacked chunks of all data in memory -> 5k, mask/colors could even be packed better+faster in 1byte for 2cells (+512b unpack table...)
+;;
+;;  TODO:
+;;  - double-level interrupt (for unpacking image data every x char lines)
+
+.pBitmap0 = cScreen0VicBankBase + cGfxBitmapOffset
+.pBitmap1 = cScreen1VicBankBase + cGfxBitmapOffset
+.pTextScreen0 = cScreen0VicBankBase + cGfxTextPageOffset
+.pTextScreen1 = cScreen1VicBankBase + cGfxTextPageOffset
+
+.cScrollStartPictureLine = 102 ; must be positive
+    
+.pScrollCodeStart:    
+
+;;    
+!macro InitCopyMaskPtr .CopyNewLineBase, .MoveScreenBase{
+    !set .LDACopyNewLine = .CopyNewLineBase + 12
+    !set .DistLDAMoveScreen = 118
+    !set .FirstLDAMoveScreen = .MoveScreenBase + 5
+
+    ldx zpFirstLine
+    lda pMaskLinePtrsLo,x
+    sta .LDACopyNewLine+1   ; 3b
+    lda pMaskLinePtrsHi,x
+    sta .LDACopyNewLine+2   ; 3b    
+    !for .Line, 0, 23{
+        inx
+        lda pMaskLinePtrsLo,x
+        sta .FirstLDAMoveScreen+1+(.DistLDAMoveScreen*.Line)   ; 3b
+        lda pMaskLinePtrsHi,x
+        sta .FirstLDAMoveScreen+2+(.DistLDAMoveScreen*.Line)   ; 3b
+    }    
+}                   ; __526, 326b
+    
+!macro MoveScreen .Bitmap, .Colors, .OtherBitmap, .OtherColors{
+    ldy #19
+-   ldx pMultiply8Table,y
+    !for .Line, 1, 24{
+        !set .DstPos1 = .Line*40
+        !set .SrcPos1 = .DstPos1-40
+        !set .DstPos2 = .DstPos1+20
+        !set .SrcPos2 = .DstPos2-40    
+    
+        lda pEmptyMaskLine,y   ; check mask         ; 3b
+        beq ++                                      ; 2b
+        asl                                         ; 1b
+        bpl +                                       ; 2b    _8b
+        !for .I, 0, 7{
+            lda .OtherBitmap+(.SrcPos1*8)+.I,x      ; 8*3b
+            sta .Bitmap+(.DstPos1*8)+.I,x           ; 8*3b  _48b
+        }
++       bcc +                                       ; 2b
+        !for .I, 0, 7{
+            lda .OtherBitmap+(.SrcPos2*8)+.I,x      ; 8*3b
+            sta .Bitmap+(.DstPos2*8)+.I,x           ; 8*3b  _48b
+        }
++       lda .OtherColors+.SrcPos1,y                 ; 3b
+        sta .Colors+.DstPos1,y                      ; 3b
+        lda .OtherColors+.SrcPos2,y                 ; 3b
+        sta .Colors+.DstPos2,y                      ; 3b    __118b -> .DistLDAMoveScreen
+++
+    }                                               
+    dey
+    bmi +
+    jmp -
++           ; 291  , __2843b
+}
+    
+    ; 291 + (30 * ((Skip32)*7 + (Copy32)*92)) bei  1/4 skip: 71k cycles. bei 1/8 skip 87k ohne skip 96k
+    ; 91489 - (82560*skip): ca. 40k bei skip = 0.5
+    
+; 8*80 = 640b bitmap data, 80b color data, 80b mask data
+
+
+
+;
+;  Data could be packed more efficient: Blocks that are not copied do not need to get packed/depacked
+;  Mask Data should be kept in memory completely: 3k... 2 blocks/byte = <1.5kb
+
+!macro CopyNewLine .Bitmap, .Colors{
+    ldx #0
+    beq +
+
+.NextX:
+    inx
+    cpx #20
+    bne +
+    jmp .End    
+    
++   ldy pEmptyMaskLine,x
+    beq .NextX                                  ; 2b
+    lda pMultiply8Table,x
+    stx .vCopyNewLineRestoreX
+    tax
+    tya
+    ldy #0
+    
+    asl                                         ; 1b
+    bpl +                                       ; 2b    _8b
+    !for .I, 0, 7{
+        lda (zpInputStream),y
+        iny
+        sta .Bitmap+.I,x
+    }
++   bcc +                                       ; 2b
+    !for .I, 0, 7{
+        lda (zpInputStream),y
+        iny
+        sta .Bitmap+(20*8)+.I,x 
+    }
+    clc
++ 
+.vCopyNewLineRestoreX = *+1
+    ldx #0
+    lda (zpInputStream),y
+    iny    
+    sta .Colors,x   
+    lda (zpInputStream),y
+    iny
+    sta .Colors+20,x
+
+    tya
+    adc zpInputStream
+    sta zpInputStream
+    bcc +
+    inc zpInputStream+1
++   jmp .NextX
+    
+.End:    
+}  
+
+
+ScrollCodeBackgroundLoop:
+    lda #<pImageStreamStart
+    sta zpInputStream
+    lda #>pImageStreamStart
+    sta zpInputStream+1
+    lda #.cScrollStartPictureLine
+    sta zpFirstLine
+    lda #cScreenState_PrepareScreen0
+    sta zpScreenState    
+
+.MoveScreen0:
+-   lda zpScreenState
+    bne +
+    rts
++   cmp #cScreenState_PrepareScreen0
+    bne -
+
+    +InitCopyMaskPtr .CopyNewLine0Impl, .MoveScreen0Impl
+.MoveScreen0Impl:
+    +MoveScreen .pBitmap0, .pTextScreen0, .pBitmap1, .pTextScreen1
+.CopyNewLine0Impl:    
+    +CopyNewLine .pBitmap0, .pTextScreen0
+    
+    dec zpFirstLine
+    bpl +
+    lda #0
+    sta zpScreenState
+    rts
++   inc zpScreenState    
+    
+.MoveScreen1:
+-   lda zpScreenState
+    bne +
+    rts
++   cmp #cScreenState_PrepareScreen1
+    bne -
+
+    +InitCopyMaskPtr .CopyNewLine1Impl, .MoveScreen1Impl
+.MoveScreen1Impl:
+    +MoveScreen .pBitmap1, .pTextScreen1, .pBitmap0, .pTextScreen0
+.CopyNewLine1Impl:
+    +CopyNewLine .pBitmap1, .pTextScreen1
+
+    dec zpFirstLine
+    bpl +
+    lda #0
+    sta zpScreenState
+    rts
++   inc zpScreenState    
+    jmp .MoveScreen0
+    
+    
+Scrol1OnePixel:
+!if (Scrol1OnePixel != Scrol1OnePixelExport){
+!error "Adjust ScrollOnePixel:" , Scrol1OnePixel
+}
+.vCurrentYScroll = *+1    
+    lda #8
+    cmp #8
+    bne .ScrollInc
+
+    lda zpScreenState    
+    cmp #cScreenState_ReadyScreen0
+    bne +
+.SwitchToScreen0:
+    lda $DD00
+    and #$FC
+    ora #.cVicMemoryBankBitsScreen0
+    sta $DD00
+    ldx #>(.pTextScreen0+1016)
+    lda #cScreenState_PrepareScreen1
+    bne .ScrollSwitchFinish
++   cmp #cScreenState_ReadyScreen1
+    bne .ScrollSkip
+.SwitchToScreen1:
+    ;select vic-bank %00 : $C000-$FFFF
+    lda $DD00
+    and #$FC
+    ora #.cVicMemoryBankBitsScreen1
+    sta $DD00
+    ldx #>(.pTextScreen1+1016)
+    lda #cScreenState_PrepareScreen0
+
+.ScrollSwitchFinish: 
+    stx pSpriteDataHi_0
+    stx pSpriteDataHi_1
+    stx pSpriteDataHi_2
+    stx pSpriteDataHi_3
+    stx pSpriteDataHi_4
+    stx pSpriteDataHi_5
+    stx pSpriteDataHi_6
+    stx pSpriteDataHi_7
+    sta zpScreenState
+    lda #0
+    sta .vCurrentYScroll
+.ScrollInc:  
+    inc .vCurrentYScroll    
+.ScrollFinish:    
+    ora #cVicVModePic
+    sta vic_controlv
+.ScrollSkip:    
+    rts
+
+.pScrollCodeEnd:    
+    
+!warn "ScrollCode: ", .pScrollCodeStart, " - ", .pScrollCodeEnd, "  Size: ", .pScrollCodeEnd-.pScrollCodeStart
+    

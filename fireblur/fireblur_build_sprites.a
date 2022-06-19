@@ -1,0 +1,306 @@
+
+
+; Die Pixel-Daten der Sprites liegen in einem 256-Byte Bereich.
+; Jede Char-Map für ein exp-Sprite ist 8*6 Zeichen groß, für Normalgröße 4*3 
+; Dabei ist jede Map so aufgebaut, dass die nächste Zeile 40 Zeichen versetzt ist, um das Blitten zu vereinfachen
+;
+; Sprite-CharData:
+;
+; 1111111122222222333333334444444455556666
+; 1111111122222222333333334444444455556666
+; 1111111122222222333333334444444455556666
+; 1111111122222222333333334444444477778888
+; 1111111122222222333333334444444477778888
+; 1111111122222222333333334444444477778888
+; 16 bytes noch frei
+;
+
+!cpu 6510
+!ZONE FIREBLUR_BUILD_SPRITES
+
+
+; INPUT:
+
+.pSpriteDataEndPtr = pSpriteDataBasePtr + (cSpriteCount * 64)
+.pSpriteCharDataEndPtr = pSpriteCharDataBasePtr + (cSpriteCount * 256)
+
+!if <pSpriteCharDataBasePtr != $00 {
+	!error "pSpriteCharDataBasePtr must Start at PageStart"
+}
+
+
+; CalcSpriteCharData verwendet $E0/$E1 in der zeropage
+.zpData = $E0
+
+;; FIREBLUR CHARSET
+.cTL = %00000011
+.cTR = %00001100
+.cBL = %00110000
+.cBR = %11000000
+
+!macro SetPix .zp, .off, .val{
+    ldy #.off
+    lda (.zp),y
+    ora #.val
+    sta (.zp),y
+}
+
+
+; Ein Pixel in den Spritedaten setzen:    
+.InitSetPixel:
+    lda #<.NextRow1
+    sta .NextRowJmp
+    lda #<.SetNextPixel1
+    sta .SetNextPixelJmp
+    ldx #0
+    stx .zpData
+    stx .StartOfCurrentDstRow
+    rts
+
+.SetNextPixel:
+.SetNextPixelJmp = *+1
+    jmp .SetNextPixel1
+
+.SetNextPixel1:
+    beq .SetNextPixel1Return
+    +SetPix .zpData, 0, .cTL
+    +SetPix .zpData, 8, .cTR
+    +SetPix .zpData, 16, .cBL
+    +SetPix .zpData, 24, .cBR
+.SetNextPixel1Return:    
+    lda #<.SetNextPixel2
+    sta .SetNextPixelJmp
+    rts
+    
+.SetNextPixel2:
+    beq .SetNextPixel2Return
+    +SetPix .zpData, 0, .cTR
+    +SetPix .zpData, 9, .cTL
+    +SetPix .zpData, 16, .cBR
+    +SetPix .zpData, 25, .cBL
+.SetNextPixel2Return:    
+    lda #<.SetNextPixel1
+    sta .SetNextPixelJmp
+    inc .zpData
+    rts
+
+.SetNextPixel3:
+    beq .SetNextPixel3Return
+    +SetPix .zpData, 0, .cBL
+    +SetPix .zpData, 8, .cBR
+    +SetPix .zpData, 56, .cTL
+    +SetPix .zpData, 64, .cTR
+.SetNextPixel3Return:    
+    lda #<.SetNextPixel4
+    sta .SetNextPixelJmp
+    rts
+
+.SetNextPixel4:
+    beq .SetNextPixel4Return
+    +SetPix .zpData, 0, .cBR
+    +SetPix .zpData, 9, .cBL
+    +SetPix .zpData, 56, .cTR
+    +SetPix .zpData, 65, .cTL
+.SetNextPixel4Return:    
+    lda #<.SetNextPixel3
+    sta .SetNextPixelJmp
+    inc .zpData
+    rts
+
+!if >.SetNextPixel1 != >.SetNextPixel4 {
+	!error "SetNextPixel1 - SetNextPixel4 must start at same page"
+}
+    
+    
+.NextRow:
+.StartOfCurrentDstRow = *+1
+    lda #0
+.NextRowJmp = *+1
+    jmp .NextRow1
+
+.NextRow1:
+    sta .zpData
+    lda #<.NextRow2
+    sta .NextRowJmp
+    lda #<.SetNextPixel3
+    sta .SetNextPixelJmp
+    rts
+
+.NextRow2:
+    clc
+    adc #40
+    sta .zpData
+    sta .StartOfCurrentDstRow
+    lda #<.NextRow1
+    sta .NextRowJmp
+    lda #<.SetNextPixel1
+    sta .SetNextPixelJmp
+    rts
+
+!if >.NextRow2 != >.NextRow1 {
+	!error "NextRow1, NextRow2 must start at same page"
+}
+    
+!macro SetSpriteCharDataOffsets .s1, .v1, .s2, .v2, .s3, .v3, .s4, .v4 {
+    lda #.v1
+    sta .s1+2+(0*8)+1
+    sta .s2+2+(0*8)+1
+    sta .s3+2+(0*8)+1
+    sta .s4+2+(0*8)+1
+    lda #.v2
+    sta .s1+2+(1*8)+1
+    sta .s3+2+(1*8)+1
+    lda #.v2+1
+    sta .s2+2+(1*8)+1
+    sta .s4+2+(1*8)+1
+    lda #.v3
+    sta .s1+2+(2*8)+1
+    sta .s2+2+(2*8)+1
+    lda #.v3+40
+    sta .s3+2+(2*8)+1
+    sta .s4+2+(2*8)+1
+    lda #.v4
+    sta .s1+2+(3*8)+1
+    lda #.v4+1
+    sta .s2+2+(3*8)+1
+    lda #.v4+40
+    sta .s3+2+(3*8)+1
+    lda #.v4+41
+    sta .s4+2+(3*8)+1
+}
+    
+.CalcSpriteExp:
+    ldx #3
+    stx .CalcSingleSpriteExpNextLine
+    jsr .InitSetPixel
+    
+.pCurrentSpriteBase1 = *+1
+-   lda pSpriteDataBasePtr, x
+.pCurrentSpriteBase2 = *+1
+    ora pSpriteDataBasePtr+3, x
+    stx .CalcSingleSpriteExpRestoreX
+    tax
+    and #%11000000
+    jsr .SetNextPixel
+    txa
+    and #%00110000
+    jsr .SetNextPixel
+    txa
+    and #%00001100
+    jsr .SetNextPixel
+    txa
+    and #%00000011
+    jsr .SetNextPixel
+.CalcSingleSpriteExpRestoreX = *+1    
+    ldx #0    
+    inx
+.CalcSingleSpriteExpNextLine = *+1   
+    cpx #3
+    bne -
+    cpx #57
+    beq .CalcNextSpriteExp
+    jsr .NextRow
+    txa
+    adc #3
+    tax
+    adc #3    
+    sta .CalcSingleSpriteExpNextLine
+    bne - ; always taken
+
+.pCalcSpritesExpCountToGo: !byte cSpriteCount
+    
+.CalcNextSpriteExp:
+    dec .pCalcSpritesExpCountToGo
+    beq .EndCalcSpriteExp
+    
+    ; increase Sprite-Ptr by 64
+    lda .pCurrentSpriteBase1
+    clc
+    adc #64
+    bcc +
+    inc .pCurrentSpriteBase1+1
+    inc .pCurrentSpriteBase2+1
+    clc
++   sta .pCurrentSpriteBase1
+    adc #3
+    sta .pCurrentSpriteBase2
+    
+    ; zpData on start of next page
+    inc .zpData+1
+    jmp .CalcSpriteExp
+    
+.EndCalcSpriteExp:
+    rts
+    
+    
+CalcSpritesData:
+    ; CurrentSpriteBase is Sprite0Base + Index*64
+    ; Singleshot, daher muss das nicht restored werden. SONST:
+    ; +SetSpriteCharDataOffsets .SetNextPixel1,0, .SetNextPixel2,8, .SetNextPixel3,16, .SetNextPixel4,24
+    ; lda #<pSpriteDataBasePtr
+    ; sta .pCurrentSpriteBase1
+    ; lda #>pSpriteDataBasePtr
+    ; sta .pCurrentSpriteBase1+1
+    ; lda #cSpriteCount
+    ; sta .pCalcSpritesExpCountToGo
+    ; lda #0
+    ; sta .pCurrentCharLineBase
+
+    lda #0
+    sta .zpData
+    lda #>pSpriteCharDataBasePtr
+    sta .zpData+1
+    jsr .CalcSpriteExp
+    
+    +SetSpriteCharDataOffsets .SetNextPixel1,32, .SetNextPixel2,36, .SetNextPixel3,152, .SetNextPixel4,156
+    lda #>pSpriteCharDataBasePtr
+    sta .zpData+1
+    jsr .InitSetPixel
+        
+.pCurrentCharLineBase = *+1
+-   lda pSpriteCharDataBasePtr,x
+    jsr .SetNextPixel
+    inx
+    cpx #6
+    bne -
+    lda .pCurrentCharLineBase
+    cmp #200
+    beq .NextSmallSprite
+    clc
+    adc #40
+    sta .pCurrentCharLineBase
+    jsr .NextRow
+    ldx #0
+    beq - ; always taken    
+
+.NextSmallSprite: 
+    ldx .zpData+1
+    inx
+    cpx #>.pSpriteCharDataEndPtr
+    beq .CalcSpritesDataEnd
+    stx .zpData+1
+    stx .pCurrentCharLineBase+1
+    jsr .InitSetPixel
+    stx .pCurrentCharLineBase
+    beq - ; always taken 
+    
+.CalcSpritesDataEnd:
+    rts
+    
+    
+    
+    
+    
+    
+    
+    
+    
+
+
+
+
+
+
+
+
+    

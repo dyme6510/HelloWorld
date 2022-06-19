@@ -1,0 +1,303 @@
+
+
+!zone InitScrollerData
+
+
+
+.DATA_DstData1Start = .DATA_CharsetRawData
+.DATA_DstData2Start = .DATA_DstData1Start + COUNT_DST_CHARACTERS
+.DATA_SrcDataStart = .DATA_DstData2Start + COUNT_DST_CHARACTERS
+
+.pSrcScroller_SymbolData_WidthTable = .DATA_SymbolSetData
+.pSrcScroller_SymbolData_LoTable = .DATA_SymbolSetData + cSymbolDataSymbolCount
+.pSrcScroller_SymbolData_HiTable = .pSrcScroller_SymbolData_LoTable + (cSymbolDataSymbolCount * 8)
+.pSrcScroller_SymbolData_LineData = .pSrcScroller_SymbolData_HiTable + (cSymbolDataSymbolCount * 8)
+.cScroller_Symbols_LineDataSize = (.DATA_SymbolSetDataEnd - .pSrcScroller_SymbolData_LineData)
+    
+;   Character Data:
+;   SRC_CHAR_DATA                        ;; __ ca. 762 Bytes (opposed to 2,5k or even full 4k)
+;   DST_CHARSET_1 (COUNT_DST_CHAR Bytes)
+;   DST_CHARSET_2 (COUNT_DST_CHAR Bytes)
+
+InitBeforeScreenDrop:
+	
+.Scroller_ClearVicPage:
+    ;cls
+	; BLANK CHARSET + Screen
+	ldx #$C0
+	ldy #$C4
+	jsr ClearPagesX2Y
+	
+.Scroller_UnpackCharacterData:
+;   ldy #<DATA_CharSet1
+;   sty .opWriteCharset+1
+;   ldy #>DATA_CharSet1
+;   sty .opWriteCharset+2
+    dec $01; / disable I/O ($01 from $35 -> $34)    
+
+    ldx #0
+-   lda .DATA_DstData1Start,x
+    jsr .BlitToCharset
+    inx
+    cpx #COUNT_DST_CHARACTERS
+    bne -
+    
+    ldy #<DATA_CharSet0
+    sty .opWriteCharset+1
+    ldy #>DATA_CharSet0
+    sty .opWriteCharset+2
+    
+    ldx #0
+-   lda .DATA_DstData2Start,x
+    jsr .BlitToCharset
+    inx
+.vCountDstChar2 = *+1
+    cpx #COUNT_DST_CHARACTERS
+    bne -
+	
+.Scroller_CopySymbolHiLoTables:    
+    ldx #0
+-   ldy .pSrcScroller_SymbolData_HiTable,x
+    lda .tabSymbolLinePages,y
+    sta DATA_Symbolset_hi_table,x
+    ldy .pSrcScroller_SymbolData_HiTable+$100,x
+    lda .tabSymbolLinePages,y
+    sta DATA_Symbolset_hi_table+$100,x
+    lda .pSrcScroller_SymbolData_LoTable,x
+    sta DATA_Symbolset_lo_table,x
+    lda .pSrcScroller_SymbolData_LoTable+$100,x
+    sta DATA_Symbolset_lo_table+$100,x    
+    inx
+    bne -
+        
+    inc $01; / enable I/O ($01 from $34 -> $35)  
+		
+	rts
+.tabSymbolLinePages: !byte >DATA_Symbolset_linepage0, >DATA_Symbolset_linepage1, >DATA_Symbolset_linepage2, >DATA_Symbolset_linepage3
+                     !byte >DATA_Symbolset_linepage4, >DATA_Symbolset_linepage5, >DATA_Symbolset_linepage6, >DATA_Symbolset_linepage7
+
+    
+    
+;; A: Char to blit
+.zpTmpHi = $10
+.BlitToCharset:
+    ldy #0
+    sty .zpTmpHi
+    ;; *8
+    asl
+    rol .zpTmpHi
+    asl
+    rol .zpTmpHi
+    asl
+    rol .zpTmpHi
+    adc #<.DATA_SrcDataStart
+    sta .opReadCharset+1
+    lda .zpTmpHi
+    adc #>.DATA_SrcDataStart
+    sta .opReadCharset+2
+    
+    ldy #7
+.opReadCharset:
+-   lda .DATA_SrcDataStart,y
+.opWriteCharset:
+    sta DATA_CharSet1,y
+    dey
+    bpl -
+    lda .opWriteCharset+1
+    adc #8
+    bcc +
+    inc .opWriteCharset+2
++   sta .opWriteCharset+1
+
+    rts
+
+InitDuringScreenDrop:
+
+    ldx #$C5
+	ldy #$CF
+	jsr ClearPagesX2Y
+	ldx #$F4
+	ldy #$FE
+	jsr ClearPagesX2Y
+
+    ; Color-RAM
+    lda #$0E
+	ldx #$D8
+	ldy #$D9
+	jsr InitPagesX2Y    
+    
+    ; Background-Color stays black
+;    and #$07
+;    ldx #10
+;-   sta pMultiBgColor,x
+;    dex
+;    bpl -
+    
+
+; Tabellen zur Zerlegung in x&7 und	x&F8>>2 
+.cScrollerXScrollRegisterFlags = %00010000 ; KEIN Extended Color Mode, 38 Spalten	
+.BuildXScrollTables:
+	ldx #0
+-	txa
+	and #7
+	ora #.cScrollerXScrollRegisterFlags
+	sta DATA_TableXScrollValue,x
+	txa
+	lsr
+	lsr
+	lsr
+	sta DATA_TableXScrollTextPage,x
+	inx
+	cpx #80
+	bne -	
+	
+; Das sollte wohl auch Teil einer Animation werden... später
+.InitLineBarColBack:
+
+    ; Just the single line from transition:
+	lda #$01
+	sta pLineBarColBack+80
+    
+.InitLineBarCol:
+	ldx #80
+-   lda pLineBarColBack+(80 * 0),x
+	sta pLineBarCol+(80 * 0),x
+    lda pLineBarColBack+(80 * 1),x
+	sta pLineBarCol+(80 * 1),x
+	dex
+	bpl -
+        
+
+.UnpackSin64Tab:
+	ldx #63
+-	txa
+	eor #63
+	tay	
+	lda .pQuarterSin64Table,x	
+	sta DATA_Sin64,x
+	sta DATA_Sin64+192,y
+	sta DATA_Sin64+256,x
+	eor #$3f
+	sta DATA_Sin64+64,y
+	sta DATA_Sin64+128,x
+	dex
+	bpl -
+
+.UnpackSinBarTab:
+	ldx #63
+-	txa
+	eor #63
+	tay	
+	lda .pQuarterSinBarTable,x	
+	sta DATA_SinBarMove1,x
+	sta DATA_SinBarMove1+192,y
+	sta .UnpackSinBarTabSub
+	lda #$90
+	sec
+.UnpackSinBarTabSub = *+1
+	sbc #0
+	sta DATA_SinBarMove1+64,y
+	sta DATA_SinBarMove1+128,x
+	dex
+	bpl -
+
+.UnpackBounceTable:
+	ldx #63
+-	lda .pYOffsetBounceTable,x
+	sta DATA_BounceTab,x
+	sta DATA_BounceTab+64,x
+	sta DATA_BounceTab+128,x
+	sta DATA_BounceTab+192,x
+    lda #0
+    sta DATA_IntroWobble,x
+	dex
+	bpl -
+    
+.CopyIntroAnimation:
+	ldx #.cIntroFrameCount-1
+-	lda .pIntroDistanceByFrame,x
+	sta DATA_IntroOffsets,x
+	dex
+	bpl -    
+    
+.CopySymbolWidthData:
+    ldx #cSymbolDataSymbolCount    
+-	lda .pSrcScroller_SymbolData_WidthTable,x
+	sta DATA_Symbolset_width_table,x
+    dex
+    bpl -
+
+.CopySymbolLineData:
+    ldx #0
+-	lda .pSrcScroller_SymbolData_LineData + $0000, x
+    sta DATA_Symbolset_linepage0, x
+	lda .pSrcScroller_SymbolData_LineData + $0100, x
+    sta DATA_Symbolset_linepage1, x
+	lda .pSrcScroller_SymbolData_LineData + $0200, x
+    sta DATA_Symbolset_linepage2, x
+	lda .pSrcScroller_SymbolData_LineData + $0300, x
+    sta DATA_Symbolset_linepage3, x
+	lda .pSrcScroller_SymbolData_LineData + $0400, x
+    sta DATA_Symbolset_linepage4, x
+	lda .pSrcScroller_SymbolData_LineData + $0500, x
+    sta DATA_Symbolset_linepage5, x
+	lda .pSrcScroller_SymbolData_LineData + $0600, x
+    sta DATA_Symbolset_linepage6, x
+	lda .pSrcScroller_SymbolData_LineData + $0700, x
+    sta DATA_Symbolset_linepage7, x
+    inx
+    bne -
+    
+	ldx #$F0
+	ldy #$F1
+	jsr ClearPagesX2Y
+
+	rts
+    
+    
+!macro InitAfterScreenDropContents {
+	ldx #$C4
+	ldy #$C4
+	jsr ClearPagesX2Y
+	ldx #$E0
+	ldy #$ED
+	jsr ClearPagesX2Y
+}
+	
+InitAfterScreenDrop:
+	+InitAfterScreenDropContents
+	rts
+	
+.pQuarterSin64Table:
+!byte $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $01, $01, $01, $01, $02
+!byte $02, $02, $03, $03, $03, $04, $04, $04, $05, $05, $06, $06, $07, $07, $08, $08
+!byte $09, $09, $0a, $0b, $0b, $0c, $0c, $0d, $0e, $0e, $0f, $10, $10, $11, $12, $13
+!byte $13, $14, $15, $16, $16, $17, $18, $19, $19, $1a, $1b, $1c, $1c, $1d, $1e, $1f
+
+.pQuarterSinBarTable:
+!byte $02, $02, $02, $02, $02, $02, $02, $03, $03, $03, $04, $04, $05, $05, $06, $06
+!byte $07, $08, $08, $09, $0a, $0b, $0c, $0c, $0d, $0e, $0f, $10, $11, $13, $14, $15
+!byte $16, $17, $19, $1a, $1b, $1d, $1e, $1f, $21, $22, $24, $25, $27, $28, $2a, $2b
+!byte $2d, $2e, $30, $32, $33, $35, $37, $38, $3a, $3c, $3d, $3f, $41, $43, $44, $46
+
+.pYOffsetBounceTable:
+!byte $0b, $0b, $0b, $0b, $0c, $0d, $0e, $0f, $10, $12, $13, $15, $17, $19, $1b, $1e
+!byte $20, $23, $26, $28, $2b, $2e, $32, $35, $38, $3c, $3f, $43, $46, $4a, $4d, $51
+!byte $54, $51, $4d, $4a, $46, $42, $3f, $3c, $38, $35, $32, $2e, $2b, $28, $26, $23
+!byte $20, $1e, $1b, $19, $17, $15, $13, $12, $10, $0f, $0e, $0d, $0c, $0b, $0b, $0b
+
+.pIntroDistanceByFrame: !byte 110, 111, 112, 113, 114, 114, 115, 116, 116, 117, 117, 118, 118, 118, 117, 117
+                        !byte 116, 115, 115, 114, 113, 112, 111, 109, 108, 106, 105, 103, 100,  97,  95,  93
+                        !byte  92,  90,  89,  88,  87,  86,  85,  85,  84,  83,  83,  82,  82,  81,  81,  81
+.cIntroFrameCount = *-.pIntroDistanceByFrame;
+
+.DATA_SymbolSetData:
+!bin "..\..\nd_proj\scroller\conv_symbols_paged.bin"
+.DATA_SymbolSetDataEnd:
+
+.DATA_CharsetRawData:
+!bin "..\..\nd_proj\scroller\conv_packed.bin"
+
+!zone END_InitScrollerData
+
+    

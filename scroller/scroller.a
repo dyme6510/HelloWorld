@@ -1,0 +1,44 @@
+STANDALONE = 0
+
+!if (STANDALONE != 0) {
+    MODULE_START = $2000
+} else {
+    MODULE_START = $B000
+}
+!src "../main/common.a"
+
+!src "scroller_constants.a"
+
+.Init:
+
+    ; setup music
+!if (STANDALONE != 0) {
+    jsr $1000
+    jsr InitBeforeScreenDrop
+    jsr InitDuringScreenDrop
+    jsr InitAfterScreenDrop
+
+    lda #$01
+    sta vic_irqmask ; Turn on raster interrupts
+    
+    ;; select vic-page 3
+    lda $DD00
+    and #$FC
+    sta $DD00
+}
+
+    jsr SetupInterrupt
+    +CopyTransitionPart Area0400, AfterArea0400
+    rts
+!src "scroller_area0400.a"
+    
+!src "scroller_rastercode.a"
+!src "scroller_blitsymbols.a"
+!src "scroller_animation.a"
+!src "scroller_rasterbars.a"
+
+!if (STANDALONE != 0) {
+    !src "scroller_init_himem.a"
+}
+
+!src "scroller_data.a"

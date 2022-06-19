@@ -1,0 +1,51 @@
+
+
+cEOT = $41  ;; End Of Text-Flag
+
+; DEFINE ADDRESSES AND GLOBALS
+cCountTextPages = 10
+cScrollTextHeightCharLines = 8
+cScrollTextHeightRasterLines = 8*cScrollTextHeightCharLines
+cSymbolDataSymbolCount = $40
+
+cScrollerFirstCharRow = 3
+pScrollerVicPageBase = $C000
+cEffectStartRasterLine = $42
+
+;; Charsets: Rechts immer Links OR 2, das EMPTY-Set ist immer auf 00 
+DATA_CharSetBlack = pScrollerVicPageBase
+DATA_CharSet0 = $D000
+DATA_CharSet1 = $D800
+
+DATA_BounceTab = $F600
+DATA_TableXScrollValue = $F700              ; 80b
+DATA_TableXScrollTextPage = $F700 + 80      ; 80b
+DATA_Symbolset_width_table = $F700 + 160    ; 64b
+DATA_SinBarMove1 = $FA00
+DATA_Sin64 = $FB00			; Last 256b of penultimate textscreen and first 64b of last textscreen
+pLineBarColBack = $FE00  	; 161b  table containing raster bar colors for each line of the effect BEFORE applying moving raster bars
+cLineBarColBackLen = $A1
+pLineCharset = $FEA2      	; 64b  offset 0 = value of first rasterline of Scrolltext
+pMultiBgColor = $FEF0		; 8b
+pLineBarCol = $FF00    		; 161b  table containing raster bar colors for each line of the effect INCLUDING moving raster bars
+pLineXScroll = $FFA2        ; 64b  offset 0 = value of first rasterline of Scrolltext
+
+COUNT_SRC_CHARACTERS = 53	; number of characters with unique graphics
+COUNT_DST_CHARACTERS = 153  ; number of used characters in CharSet0/1, MAX: 192
+COUNT_MULTICOLOR_ENTRIES = 8;
+
+DATA_Symbolset_lo_table = $D600
+DATA_Symbolset_hi_table = $DE00
+
+DATA_Symbolset_linepage0 = $C600
+DATA_Symbolset_linepage1 = $C700
+DATA_Symbolset_linepage2 = $CA00
+DATA_Symbolset_linepage3 = $CB00
+DATA_Symbolset_linepage4 = $CE00
+DATA_Symbolset_linepage5 = $CF00
+DATA_Symbolset_linepage6 = $F200
+DATA_Symbolset_linepage7 = $F300
+
+DATA_IntroOffsets = $0790
+cIntroOffsetsFrameCount = $30
+DATA_IntroWobble = $07C0

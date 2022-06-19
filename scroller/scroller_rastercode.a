@@ -1,0 +1,398 @@
+;
+;   RasterCode für den Scroller:
+;   in Jeder Zeile wird pLineBarCol als Rasterzeilenfarbe gesetzt, zusätzlich wird im Verlauf
+;   pLineBarCol auf pLineBarColBack zurückgesetzt
+;   damit das funktioniert, muss der gesamte Effekt doppelt so hoch sein wie der scroller
+;   Im Scrolltext selbst wird XScroll und Charset/Textpage (MEM) gesetzt
+;
+
+cAdditionalControlVFlags = %00010000; DEN-Bit gesetzt (Display ENable)
+
+cScrollerBounceHeight = 8*8
+cMaxRasterBarHeight = 16
+cTotalEffectHeight = cScrollTextHeightRasterLines + cScrollerBounceHeight + 2*cMaxRasterBarHeight
+
+cLastLineOfEffect = cTotalEffectHeight
+    
+!zone SCROLLER_RASTERCODE
+
+; ASSERT pLineBarColor_Lo = 0
+
+!if <pLineBarCol != $00 {
+    !error "pLineBarCol must be at $xx00, else calculating offsets into table require additions"
+}
+!if <pLineBarColBack > $80 {
+    !error "pLineBarColBack must not cross Page Boundaries! Timing will be off!"
+}
+.cEnableNtscSupport = 0
+
+
+.pVicLine2Offset: !byte $12,$13,$14,$15,$16,$17,$10,$11 ; index+2 & 7 | cAdditionalControlVFlags
+
+.RasterFirstIRQ:        ; Innerhalb der neuen Rasterline sind bereits 7-14 Takte vergangen. 
+                        ; ACHTUNG: nur Rasterlines 1-6, keine bad lines hier oder in der nächsten Zeile!
+
+    inc vic_line        ; 6 Trigger DoubleIRQ on next Raster line        
+                        
+    pha:txa:pha:tya:pha; 13T Save Registers on stack    ;26-33T
+    
+    ; Set up DoubleIRQ vector : 12T
+    lda #<.RasterDoubleIRQ
+    sta cpu_irq
+    lda #>.RasterDoubleIRQ
+    sta cpu_irq+1                                       ;38-45T
+    
+    asl vic_irq ; Acknowlege current IRQ : 6T
+    ;44-51T
+    
+    tsx         ; 2T Store current Stack Pointer (will be messed up when the next IRQ occurs)
+    cli         ; 2T Allow IRQ to happen (Remeber the Interupt flag is set by the Interrupt Handler).
+    ;48-55T
+    
+    nop ; 2
+    lda vScrollerYOffset                        ; 4 : 54-61
+    
+    ; Execute NOPs until the raster line changes and the Raster IRQ triggers
+    nop : nop : nop : nop : nop : nop ; last nop needeed for 65cycle NTSC-VIC : T66-73
+
+    ; you should not get here, but this happens when something like a bad line messes up the timing
+.DEBUGReturnFromInterruptError:
+    lda #$02
+    sta $D020 ; indicate error by turning the frame RED
+    lda #<.RasterFirstIRQ    ; low part of address of interrupt handler code
+    sta cpu_irq ; store in interrupt vector
+    lda #>.RasterFirstIRQ    ; high part of address of interrupt handler code
+    sta cpu_irq+1    ; store in interrupt vector
+    jmp .ReturnFromInterrupt    
+
+.RasterDoubleIRQ:   ; Innerhalb der neuen Rasterline sind bereits 7-8 Takte vergangen. 
+                    ; Der Effekt beginnt erst in der nächsten Zeile
+    txs             ; 2 Restore previous Stack Pointer (ignore the last Stack Manipulation by the IRQ)
+
+    ; now burn cycles: | PAL-63 : 44 |  NTSC-64 : 45 | NTSC-65 : 46
+
+    ; hier das Offset für die RasterBar-Farbtabellen im Scroller
+    ldx #0                              ; 2
+    sta .vScrollerBarColorTableLo0      ; 4
+    sta .vScrollerBarColorTableLo1      ; 4
+    sta .vScrollerBarColorTableLo2      ; 4
+    sta .vScrollerBarColorTableLo3      ; 4
+    sta .vScrollerBarColorTableLo4      ; 4
+    sta .vLastLineBeforeScroller        ; 4
+    dec .vLastLineBeforeScroller        ; 6
+    clc                                 ; 2
+    adc #cScrollTextHeightRasterLines   ; 2
+    sta .vFirstEffectLineAfterScroller  ; 4
+
+    lda pLineBarCol                     ; 4
+
+    ; Check if $d012 is incremented and rectify with an aditional cycle if neccessary
+    ldy vic_line    ; 59-60: noch die alte line
+    cpy vic_line    ; 63-00 <- critical instruction (ZERO-Flag will indicate if Jitter = 0 or 1)
+    beq *+2         ; Add one cycle if $d012 wasn't incremented (Jitter / ZERO-Flag = 0)
+   
+    ldy #00                         ; 2
+.linebeforescroller:                    ; +5
+    sta vic_cborder                 ; 4
+.adjustNtsc65StaX02:
+    sta vic_cbg                     ; 4 : +13
+    
+    ; bad line in 2 lines always        : 16 cycles
+    clc                             ; 2
+    lda vic_line                    ; 4
+    adc #2                          ; 2
+    and #$07                        ; 2
+    ora #cAdditionalControlVFlags   ; 2
+    sta vic_controlv                ; 4   +29
+    
+    iny                             ; 2
+    lda pLineBarCol,y               ; 4
+.vLastLineBeforeScroller = *+1
+    cpy #0                          ; 2
+.BranchToSetLineVariablesLineBeforeScroller
+    beq .SetLineVariablesLineBeforeScroller         ; 2 / 3 if taken :branches at +40
+
+    ; wait 26 cycles
+    ; restore raster bar background colors in the process. This is omitted for the last line before scroller
+.vRestoreBackCol1 = *+1
+    ldx pLineBarColBack     ; 4
+.vRestoreBackCol2 = *+1
+    stx pLineBarCol         ; 4
+    inc .vRestoreBackCol1   ; 6
+    inc .vRestoreBackCol2   ; 6
+    ldx #0                  ; 2
+    stx pScrollerVicPageBase + $3FFF ; 4  clear the bits that get displayed during FLD
+                                     ;    exit @+65
+
+    jmp .linebeforescroller        ; 3    
+;
+;   #############  SCROLLER TEXT AREA ############## ENTER Scroller -2line +51
+;
+.SetLineVariablesLineBeforeScroller:    ; +40
+    ; wait 11, x:=line to restore BackColor next
+    ldx .vRestoreBackCol1    ; 4
+    pha : pla                ; 7
+
+    lda pLineBarCol,y               ; 4
+    ldy #0                          ; 2
+    sta vic_cbg                     ; 4
+    sta vic_cborder                 ; 4     MUST end in new line+2
+
+    lda pLineCharset,y              ; 4
+    sta .vLine0Charset              ; 4
+    lda pLineXScroll,y              ; 4
+    sta .vLine0XScroll              ; 4
+    lda pLineCharset+1,y            ; 4
+    sta .vLine1Charset              ; 4
+    lda pLineXScroll+1,y            ; 4
+    sta .vLine1XScroll              ; 4     +34
+
+.SetLineVariablesLine0:             ;       enter -29 before BadLine; line7+34
+    ;enters with y=0mod8
+
+.vScrollerBarColorTableLo0 = *+1
+    lda pLineBarCol,y               ; 4
+    sta .vLine0BarCol               ; 4
+    iny                             ; 2     +44
+.vScrollerBarColorTableLo1 = *+1
+    lda pLineBarCol,y               ; 4
+    sta .vLine1BarCol               ; 4     +52 ends at -11
+
+.vLine0XScroll = *+1
+    lda #0                          ; 2
+    sta vic_controlh                ; 4
+.vLine0BarCol = *+1
+    lda #0                          ; 2
+    sta vic_cbg                     ; 4 +ntsc
+    sta vic_cborder                 ; 4 +ntsc   +5
+.vLine0Charset = *+1
+    lda #0                          ; 2
+    sta vic_ram                     ; 4     ends +11pal
+
+.SetLineVariablesLine1:
+.vLine1XScroll = *+1
+    lda #0                          ; 2
+    sta vic_controlh                ; 4 ; inc. 43 cycles BadLine-Stall : +60
+.vLine1BarCol = *+1
+    lda #0                          ; 2
+    sta vic_cbg                     ; 4
+    sta vic_cborder                 ; 4
+.vLine1Charset = *+1
+    lda #0                          ; 2
+    sta vic_ram                     ; 4     ends +13pal
+
+    iny                             ; 2     y = 2mod8
+
+    lda pLineCharset+7,y            ; 4
+    sta .vLine1Charset              ; 4
+    lda pLineXScroll+7,y            ; 4
+    sta .vLine1XScroll              ; 4     +31p
+
+    lda pLineCharset,y              ; 4
+    sta .vLine2Charset              ; 4
+.vScrollerBarColorTableLo2 = *+1
+    lda pLineBarCol,y               ; 4
+    sta .vLine2BarCol               ; 4     +47p
+
+.SetLineVariablesLine2:
+    ; LINE 2 HSCROLL
+    lda pLineXScroll,y              ; 4
+    sta vic_controlh                ; 4
+    iny                             ; 2     y = 3mod8     +57 = -6
+.vLine2BarCol = *+1
+    lda #0                          ; 2
+    sta vic_cbg                     ; 4
+    sta vic_cborder                 ; 4     +4
+.vLine2Charset = *+1
+    lda #0                          ; 2
+    sta vic_ram                     ; 4     ends +10pal
+
+    lda pLineCharset+5,y            ; 4
+    sta .vLine0Charset              ; 4
+    lda pLineXScroll+5,y            ; 4
+    sta .vLine0XScroll              ; 4
+    tya                             ; 2
+    ora #7                          ; 2
+    sta .vNextBadLineY              ; 4     +34p
+
+.SetLineVariablesLine3:
+    ; prepare NextBgColor1
+    lda vic_cbg1                    ; 4
+    sta vic_cbg2                    ; 4
+.pNextBgColorLo = *+1
+    lda pMultiBgColor               ; 4
+    sta .vNewBgCol1                 ; 4    +50p
+
+    lda pLineXScroll,y              ; 4
+    sta vic_controlh                ; 4     +58p = -5
+.vScrollerBarColorTableLo3 = *+1
+    lda pLineBarCol,y               ; 4     -1
+    sta vic_cborder                 ; 4     +3
+    sta vic_cbg                     ; 4     +7
+    lda pLineCharset,y              ; 4
+    sta vic_ram                     ; 4     ends +15pal
+.vNewBgCol1 = *+1
+    lda #0                          ; 2
+    sta vic_cbg1                    ; 4     +21p
+    
+
+.BRANCHAREASTART
+.afterLine3:                        ; enters @+21p
+    nop                             ; 2
+    iny                             ; 2 +25p
+
+    lda pLineBarColBack,x   ; 4
+    sta pLineBarCol,x       ; 5
+    inx                     ; 2
+    lda pLineBarColBack,x   ; 4
+    sta pLineBarCol,x       ; 5
+    inx                     ; 2     __22, +47p
+
+.SetLineVariablesLine4to7: ; enter: +47
+    
+    lda pLineXScroll,y              ; 4
+    sta vic_controlh                ; 4     +55p = -8
+.vScrollerBarColorTableLo4 = *+1
+    lda pLineBarCol,y               ; 4     -4
+    sta vic_cborder                 ; 4     +0
+    sta vic_cbg                     ; 4     +4
+    lda pLineCharset,y              ; 4
+    sta vic_ram                     ; 4     ends +12pal
+    
+    cpy #cScrollTextHeightRasterLines-1 ; 2
+    beq .lastScrollerLine           ; 2     branches +17p
+.vNextBadLineY = *+1
+    cpy #0                          ; 2
+    bne .afterLine3                 ; 3     branches +21p
+
+.prepareBadLine:    ; +20p
+.BRANCHAREAEND
+    inc .pNextBgColorLo             ; 6
+    iny                             ; 2
+    bne +                           ; 3
++   jmp .SetLineVariablesLine0      ; 3     req: +34p
+    
+!if >.BRANCHAREASTART != >.BRANCHAREAEND {
+    !error "branches cross boundaries. timing is off!"
+}
+
+.lastScrollerLine: ; enters +18
+    ; Quick! disable bad line!
+    ; bad line in 2 lines always        : 16 cycles
+    clc                             ; 2
+    lda vic_line                    ; 4
+    adc #2                          ; 2
+    and #$07                        ; 2
+    ora #cAdditionalControlVFlags   ; 2
+    sta vic_controlv                ; 4   +34
+    
+    ; wait 18, reset .restoreBackCol1+2
+    lda #0                   ; 2
+    sta .vRestoreBackCol1    ; 4
+    sta .vRestoreBackCol2    ; 4
+
+    lda pLineBarColBack,x    ; 4
+    sta pLineBarCol,x        ; 5
+    inx                      ; 2        
+    
+.vFirstEffectLineAfterScroller = *+1
+    ldy #0                          ; 2
+    
+.lineafterscroller: ; enter at +57
+    ;   set color                           : 12 cycles
+    lda pLineBarCol,y               ; 4
+    sta vic_cborder                 ; 4
+    sta vic_cbg                     ; 4     MUST end in new line, at +69 -> +6
+            
+    ;   advance y                   :   6 cycles
+    cpy #cLastLineOfEffect          ; 2
+    beq .effectend                  ; 2 / 3 if taken
+
+    ; bad line in 6-7 lines always  : 14 cycles (carry is irrelevant)
+    lda vic_line                    ; 4
+    adc #6                          ; 2
+    and #$07                        ; 2
+    ora #cAdditionalControlVFlags   ; 2
+    sta vic_controlv                ; 4   +26
+    
+    ; wait 26 cycles; restore backcolor some more
+    lda pLineBarColBack,x    ; 4
+    sta pLineBarCol,x        ; 5
+    inx                      ; 2        
+    lda pLineBarColBack,y    ; 4
+    sta pLineBarCol,y        ; 5
+    nop : nop : nop : nop    ; 8
+    iny                      ; 2     +56
+        
++   jmp .lineafterscroller         ; 3    -> +54
+
+.effectend: ; enters at +8
+    ; empty textpage, empty charset
+    stx vic_ram                     ; 4
+    ; reset vscroll before first bad line of screen
+    lda vic_controlv
+    and #$78
+    sta vic_controlv
+
++   lda #<.RasterFirstIRQ    ; low part of address of interrupt handler code
+    sta cpu_irq ; store in interrupt vector
+    lda #>.RasterFirstIRQ    ; high part of address of interrupt handler code
+    sta cpu_irq+1    ; store in interrupt vector    
+    jsr AnimationSubRoutine
+    
+;RESTORE Char Color Animation    
+    lda #<pMultiBgColor+1
+    sta .pNextBgColorLo; restore multicolor1
+    lda pMultiBgColor
+    sta vic_cbg1; restore multicolor1       
+    
+.ReturnFromInterrupt:
+    lda #cEffectStartRasterLine
+    sta vic_line
+    
+    ; return from interrupt: enable ne
+    pla:tay:pla:tax:pla ; restore all registers
+    asl vic_irq         ; enable next interrupt 
+.emptyNMI
+    rti
+
+
+
+SetupInterrupt:
+    lda #$F0
+-   cmp vic_line
+    bne -
+
+    sei
+        
+    lda #$0D
+    sta vic_cbg2
+
+    lda #$00
+    sta vic_ram ; screen at $C000, charset at $C000
+    
+    lda #<.RasterFirstIRQ    ; low part of address of interrupt handler code
+    sta cpu_irq ; store in interrupt vector
+    lda #>.RasterFirstIRQ    ; high part of address of interrupt handler code
+    sta cpu_irq+1    ; store in interrupt vector
+
+    ; Clear high bit of $d012, set 24row text mode
+    lda #cAdditionalControlVFlags
+    sta vic_controlv
+
+    lda #cEffectStartRasterLine
+    sta vic_line
+        
+    asl $d019    ; ACK VIC interrupts
+    cli 
+    
+    rts
+
+
+
+!if >.SetLineVariablesLineBeforeScroller != >.BranchToSetLineVariablesLineBeforeScroller {
+    !error "branches cross boundaries. timing is off!"
+}
+
+
+

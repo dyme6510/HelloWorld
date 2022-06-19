@@ -1,0 +1,52 @@
+cScreen0VicBankBase = $8000
+cScreen1VicBankBase = $C000
+
+; due to Vic-Bank 8000-C000, 9000-A000 is seen as ROM-Charset by Vic always
+; so no Gfx-Data at offset $1000-$2000
+cGfxBitmapOffset = $2000        ; Bitmap                    : 8k
+cGfxTextPageOffset = $0000      ; Color Screen for Bitmap   : 1k
+cGfxSpriteAOffset = $0800       ; 32 Sprites A-Z+           : 2k
+
+pGfxBitmapPage0 = cScreen0VicBankBase+cGfxBitmapOffset
+pGfxBitmapPage1 = cScreen1VicBankBase+cGfxBitmapOffset
+
+pGfxTextPage0 = cScreen0VicBankBase+cGfxTextPageOffset
+pGfxTextPage1 = cScreen1VicBankBase+cGfxTextPageOffset
+
+pSpriteBitmapsPage0 = cScreen0VicBankBase + cGfxSpriteAOffset
+pSpriteBitmapsPage1 = cScreen1VicBankBase + cGfxSpriteAOffset
+
+pMaskData = $9000
+pMultiply8Table = $95E0
+pMaskLinePtrsLo = $9600
+pMaskLinePtrsHi = $9680
+pEmptyMaskLine = pMaskData
+
+pSpriteX = $9700
+pSpriteColor1 = $9800
+pSpriteColor2 = $9900
+pSpriteData1 = $9A00
+pSpriteData2 = $9B00
+pSpriteSinTableX = $9C00
+
+zpFirstLine = $30
+zpInputStream = $39;/$3A
+zpScreenState = $3B
+zvSpritePtrBase = $3C;/$3D
+
+cScreenState_Stop = 0
+cScreenState_PrepareScreen0 = 1
+cScreenState_ReadyScreen0   = 2
+cScreenState_PrepareScreen1 = 3
+cScreenState_ReadyScreen1   = 4
+
+cVicVModePic = %00110000 ; ECM=0, BMM (Bitmap mode), DEN (Display Enable), 24 rows
+
+Scrol1OnePixelExport = $76ca
+cScrollTextLen = 105
+cScrollTextPosStartPicture = 6
+
+;; code: somewhere 5000-8000
+
+
+

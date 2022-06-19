@@ -1,0 +1,746 @@
+STANDALONE = 0
+
+!if (STANDALONE != 0) {
+	MODULE_START = $2000
+} else {
+	MODULE_START = $E000
+}
+!src "../main/common.a"
+	jmp .Init	
+
+pVicTextPageBase = $C000
+pVicCharsetPageBase = $C000
+DATA_Sprites = $C400;
+
+!if ((pVicTextPageBase >> 14) != (DATA_Sprites >> 14)) {
+	!error "DATA_Sprites must be in same VIC-Block as pVicTextPageBase"
+}
+
+	
+cBorderColor = $E
+cBgColor = $6
+cOffColor = $0
+
+;; Indirect Jump to IRQ, damit $FFFF = 0 sein kann (Vic-Page + $3FFF wird im Border angezeigt)
+.pIrqZeroPageJMP = $F5
+.pIrqZeroPageLo = .pIrqZeroPageJMP + 1
+.pIrqZeroPageHi = .pIrqZeroPageJMP + 2
+
+.pSprite0DataPtr = pVicTextPageBase + 1020
+.pSprite1DataPtr = pVicTextPageBase + 1021
+.pSprite2DataPtr = pVicTextPageBase + 1022
+.pSprite3DataPtr = pVicTextPageBase + 1023
+.cVicMemoryPtr = ((pVicTextPageBase >> 6) & $F0) + ((pVicCharsetPageBase >> 10) & $0E)
+.pVicBankIndex = (pVicTextPageBase >> 14) & $03;
+.pVicBankBase = .pVicBankIndex * $4000;
+.pBorderCharValue = .pVicBankBase + $3FFF;
+
+.cSpriteBaseNumber = (DATA_Sprites >> 6) & $FF;
+
+.cCursorBlinkFreq = 18
+.cGraphicModeFlags = %00010000
+
+.cFirstOpenVBorderLine = $F7
+.cLastOpenVBorderLine = $FA
+.cDefaultOpenVBorderLine = $F8
+.cDefaultOpenVBorderVControl = .cGraphicModeFlags | 8 | ((.cDefaultOpenVBorderLine + 5) & 7)
+.cSpritePosition = 58
+.cSpriteStretchStartLine = $FE  ;; Not FF, we need 1 Line to prepare
+
+; Anzahl Zeilen + erste sichtbare Zeilennummer PAL: 284/312 Zeilen sichtbar, erste Zeile = 14
+; NTSC: 234(+1) / 262(+1)
+.cOffscreenLineNumberPAL = 302
+.cOffscreenLineNumberNTSC64 = 15
+.cOffscreenLineNumberNTSC65 = 16
+
+.cOffscreenOffset = <299       ; Ntsc64/65:    276/277
+
+.cMaxBounceStartScreenPos = .cOffscreenOffset + 20
+
+.vCursorBlinkCounter:   !byte .cCursorBlinkFreq
+
+;; colors for screen. Die Zeilennummern sind immer die letyte Zeile VOR der neuen Farbe
+pAllColors:
+pBgColors:      !byte cOffColor, cBorderColor, cBgColor, cBorderColor, 0, 0, 0
+pBorderColors:  !byte cOffColor, cBorderColor, cBorderColor, cBorderColor, 0, 0, 0
+
+.pIrqHandlerLo: !byte  <.ColorChangeIrq, <.ColorChangeIrq, <.ColorChangeIrq, <.ColorChangeIrq, <.OpenBorderIrq, <.SpriteDelayIrq, <.OffscreenIrq
+.pIrqHandlerHi: !byte  >.ColorChangeIrq, >.ColorChangeIrq, >.ColorChangeIrq, >.ColorChangeIrq, >.OpenBorderIrq, >.SpriteDelayIrq, >.OffscreenIrq
+
+.cCountOffsets = 4
+
+;; vic_lines zum farbe setzen.
+.pColorChangeLinesLo:  !byte  0, 0, 0, 0, .cDefaultOpenVBorderLine,     .cSpriteStretchStartLine,   0
+.pColorChangeVControl: !byte  0, 0, 0, 0, .cDefaultOpenVBorderVControl, .cGraphicModeFlags,         .cGraphicModeFlags | 0x80
+.pColorChangePosLo:    !byte  0, 0, 0, 0, .cDefaultOpenVBorderLine,     .cSpriteStretchStartLine,   <.cOffscreenLineNumberPAL
+
+.cPseudoOffsetOpenBorder = 4
+.cPseudoOffsetSpriteDelay = 5
+.cPseudoOffsetOffscreen = 6
+
+.vOffscreenIrqLineLo    = .pColorChangeLinesLo + .cPseudoOffsetOffscreen
+.vOffscreenIrqLineHi    = .pColorChangeVControl + .cPseudoOffsetOffscreen
+.vSpritePosLo           = .pColorChangePosLo + .cPseudoOffsetSpriteDelay
+.vSpriteDelayLine       = .pColorChangeLinesLo + .cPseudoOffsetSpriteDelay
+
+.zpBlitSrc = $10
+.zpUnusedForTiming = $11
+
+.pDropAnimationDX: !byte 0,0,0,1, 0,1,1,0
+.pDropAnimationReboundDX: !byte -9,-9,-9,-8, -9,-8,-8,-9
+
+.pPreDropDelays: !byte 250,35,20,10,15,20,10,30,12,15,20,15,120
+;.pPreDropDelays: !byte 2,2,2,2,2,2,2,2,2,2,2,2,2
+
+.Init:
+	jsr InitBeforeScreenDrop
+	
+    lda #0
+    sta .pBorderCharValue
+
+    ; init colors
+    lda vic_cborder
+    ldx #3
+-   sta pBgColors,x
+    sta pBorderColors,x
+    dex
+    bne -
+    lda vic_cbg
+    sta pBgColors+2
+
+    ; init sprites
+    lda #.cCursorBlinkFreq
+    sta .vCursorBlinkCounter
+    lda #$F0
+    sta vic_sactive
+    clc
+    lda #24
+    sta vic_xs4
+    adc #24
+    sta vic_xs5
+    adc #24
+    sta vic_xs6
+    adc #32
+    sta vic_xs7
+    lda #.cSpritePosition
+    sta vic_ys4
+    sta vic_ys5
+    sta vic_ys6
+    sta vic_ys7
+
+    ldx #.cSpriteBaseNumber+3
+    ldy #3
+-   txa
+    sta .pSprite0DataPtr,y
+    lda $d800
+    sta vic_cs4,y
+    dex
+    dey
+    bpl -
+	
+    ;select vic-bank %00 : $C000-$FFFF
+ 	lda #.cVicMemoryPtr
+	sta vic_ram
+    lda $DD00
+    and #$FC
+    sta $DD00
+
+    lda #%00011000
+    sta vic_controlh
+    
+    jsr .BlitReady
+
+    ; Init Offscreen Interrupt Request and more
+    lda #<.cOffscreenLineNumberPAL
+    sta .vOffscreenIrqLineLo
+    lda #(.cGraphicModeFlags | $88)
+    sta .vOffscreenIrqLineHi
+
+SetupInterrupt:
+    sei
+
+	lda #$01
+	sta vic_irqmask	; Turn on raster interrupts
+
+    lda #opcode_JMP_16
+    sta .pIrqZeroPageJMP
+	lda #.pIrqZeroPageJMP
+	sta cpu_irq	     ; store in interrupt vector
+	lda #0           ; high part of address of interrupt handler code
+	sta cpu_irq+1    ; store in interrupt vector
+    
+	lda #<.OffscreenIrq    ; low part of address of interrupt handler code
+	sta .pIrqZeroPageLo	; store in interrupt vector
+	lda #>.OffscreenIrq    ; high part of address of interrupt handler code
+	sta .pIrqZeroPageHi    ; store in interrupt vector
+
+    lda .vOffscreenIrqLineHi
+	sta vic_controlv
+	lda .vOffscreenIrqLineLo
+	sta vic_line
+
+	asl $d019    ; ACK VIC interrupts
+	cli
+
+	+CopyTransitionPart Area0400, AfterArea0400
+	jsr InitDuringScreenDrop
+	+SignalUnpackNextPart
+    rts
+
+;; A: Character to Blit (0-255)
+.pBlitDstStartOffset: !byte 24, 25, 26, 88, 89, 90, 48, 49, 50, 112, 113, 114, 176, 177, 178, 240, 241, 242
+.pCharacterRom = $D000
+.BlitCharacterToSprite:
+.vCursorPos = *+1
+    ldy #0 ;; Y: dst index (first row: 0-5, second row: 6-18)
+    asl                             ; 2     1b
+    rol .zpBlitSrc+1                ; 5     2b
+    asl                             ; 2     1b
+    rol .zpBlitSrc+1                ; 5     2b
+    asl                             ; 2     1b
+    rol .zpBlitSrc+1                ; 5     2b
+    sta .zpBlitSrc                  ; 3     2b
+    lda .zpBlitSrc+1
+    and #$7
+    ora #>.pCharacterRom            ; 2     2b
+    sta .zpBlitSrc+1                ; 3     2b
+    ldx .pBlitDstStartOffset, y     ; 4     3b
+    ldy #7                          ; 2 35  2b
+
+    ;; access character ROM
+    lda #$31
+    sta $01
+
+-   lda (.zpBlitSrc),y              ; 5     2b
+    sta DATA_Sprites,x              ; 4     3b
+    dex : dex : dex : dey           ; 8     4b
+    bpl -                           ; 2/3   2b
+
+    ;; restore I/O ROM
+    lda #$35
+    sta $01
+
+    rts                             ; 6     1b      __35b
+
+; Called Indirectly from ZeroPage-IRQ @10-17
+;; Calculate all Interrupt- and Sprite-Positions for next Screen
+.OffscreenIrq:
+	pha:txa:pha:tya:pha ; 13    Save Registers on stack    ;@23-30    
+;	jsr $1003
+.vPreDropFinishFlag = *+1
+    ldy #0
+    bne +
+    jmp .PreDropAnimation
++   ldy #cOffColor
+    sty vic_cbg
+    sty vic_cborder
+    ldy #.cGraphicModeFlags | $08
+    sty vic_controlv
+
+.CalcColorLines:
+    ldx #0
+    stx .vCurrentColorLineIndex
+    clc
+.vScreenStartOffsetHi = *+1
+    ldy #0
+.vScreenStartOffsetLo = *+1
+    lda #0
+.LoopBeforeFF:
+    stx .vPosAfterFF
+.ColorLineOffsets = *+1
+-   adc .pOffsetsPAL,x
+    sta .pColorChangePosLo,x
+    bcc +
+    iny
++   cpy #1
+    bcs + ; branch if Y is >= 1 (i.e. not zero)
+    inx
+    bne .LoopBeforeFF
++   bne .OffscreenLineReached   ; branch if Y is not one (i.e. greater than one)
+    cmp #.cOffscreenOffset
+    bcs .OffscreenLineReached
+    inx
+    cpx #.cCountOffsets
+    bne -
+
+.OffscreenLineReached:
+    stx .vAfterColorIrqIndex
+    lda pBgColors,x
+    sta pBgColors + .cPseudoOffsetOffscreen
+    lda pBorderColors,x
+    sta pBorderColors + .cPseudoOffsetOffscreen
+
+    ldy .vPosAfterFF
+    beq .SetOpenBorderIndex
+.AdjustOpenBorderIndex:  ; Open Border Index ist last Index before .cLastOpenVBorderLine
+    dey
+    lda .pColorChangePosLo,y
+    and #1
+    ora #.cDefaultOpenVBorderLine
+    sta .pColorChangeLinesLo + .cPseudoOffsetOpenBorder
+    cmp .pColorChangePosLo,y
+    bne .CheckIncreaseOpenBorderIndex
+    iny
+    sty .vAfterOpenBorderIndex
+    ldy #$FF
+    bne .AfterAdjustOpenBorderIndex
+.CheckIncreaseOpenBorderIndex:
+    bcc .SetOpenBorderIndex
+    iny
+.SetOpenBorderIndex
+    sty .vAfterOpenBorderIndex
+    lda pBgColors,y
+    sta pBgColors + .cPseudoOffsetOpenBorder
+    lda pBorderColors,y
+    sta pBorderColors + .cPseudoOffsetOpenBorder
+.AfterAdjustOpenBorderIndex:
+    sty .vOpenBorderIndex
+
+.AdjustSpriteDelay:
+    ldy #$F0
+    ldy #$F0
+    lda .vScreenStartOffsetLo
+    clc
+    adc #.cSpritePosition
+    ldx .vScreenStartOffsetHi ; does not affect carry, only zero
+    bcc +
+    inx
++   beq .SetSpriteValuesNoStretch
+    cmp #.cOffscreenOffset - 6 
+    bcc +
+    ldy #0  ; disable sprites when not visible
+.SetSpriteValuesNoStretch
+    ldx #.cPseudoOffsetOffscreen
+    bne .SetSpriteValues
++
+    tay
+    iny
+    sty .vSpritePosLoAdjusted
+
+    ;; spriteline berechnen, falls 2lines vorher eine colorChange liegt
+    ldx .vPosAfterFF
+    dex
+    lda .pColorChangePosLo,x
+    ldy #.cSpriteStretchStartLine-3
+    cmp #.cSpriteStretchStartLine-1
+    bcs +
+    ldy #.cSpriteStretchStartLine
+    inx
++   sty .vSpriteDelayLine
+    lda #$FE        ; Sprite-pos at FE, but stretch 1 further...
+    ldy #$F0        ; active sprites
+    stx .vAfterColorIrqIndex ;;Delay on
+    lda pBgColors,x
+    sta pBgColors + .cPseudoOffsetSpriteDelay
+    lda pBorderColors,x
+    sta pBorderColors + .cPseudoOffsetSpriteDelay
+
+    ldx #.cPseudoOffsetSpriteDelay
+.SetSpriteValues:
+    sta vic_ys4
+    sta vic_ys5
+    sta vic_ys6
+    sta vic_ys7
+    sty vic_sactive
+    stx .vPseudoOffsetAfterColor
+
+.CalcColorLineAndVControl:
+    ldx #0
+-   lda .pColorChangePosLo,x
+    ldy #0
+.vPosAfterFF = *+1
+    cpx #0
+    bcc +			; vor $FF, keine anpassung notwendig
+    iny
+.vMaxLineNumberLo = *+1    
+    cmp #<312                   ; Ntsc64/65:    262/263
+    bcc +                       ; vor vMaxLineLo, keine anpassung notwendig
+    sbc .vMaxLineNumberLo		; nach MaxLine ist Hi wieder 0
+    dey
++   sta .pColorChangeLinesLo,x
+    and #$07
+    eor #($04 | .cGraphicModeFlags)
+.vAfterOpenBorderIndex = *+1
+    cpx #$FF
+    bcs +       ; 24 Zeilen nach open border (set RSEL überspringen)
+    ora #$08    ; set RSEL
++   cpy #0
+    beq +
+    ora #$80
++   sta .pColorChangeVControl,x
+    inx
+    cpx .vAfterColorIrqIndex
+    bcc -
+    lda .vOffscreenIrqLineHi
+    sta .pColorChangeVControl,x
+
++   jsr .BlinkCursor
+
+    ;; drop animation
+.currentDX = *+1
+    ldx #0
+    ldy .vScreenStartOffsetHi
+    beq +
+    ldy .vScreenStartOffsetLo
+    cpy #(.cMaxBounceStartScreenPos & $FF)
+    bcc +
+    lda .pDropAnimationDX,x
+    bmi .ContinueAfterReverseBounce
+    lda .pDropAnimationReboundDX,x
+    adc #1
+    sta .pDropAnimationDX,x
+    sta .pDropAnimationReboundDX,x
+    bmi .IncCurrentDX
+	+SignalRun0400
+    jsr JustMusicIrq
+	jmp .ReturnFromInterrupt
+.ContinueAfterReverseBounce:
+    ldy #(.cMaxBounceStartScreenPos & $FF) - 1
+    sty .vScreenStartOffsetLo
+    ldx #0
+    stx .currentDX
+    jmp .ScheduleNextInterrupt
++   ldy #0
+    lda .pDropAnimationDX,x
+    bpl +
+    dey
++   clc
+    adc .vScreenStartOffsetLo
+    sta .vScreenStartOffsetLo
+    tya
+    adc .vScreenStartOffsetHi
+    sta .vScreenStartOffsetHi
+    inc .pDropAnimationDX,x
+.IncCurrentDX:
+    inx
+    txa
+    and #$07
+    sta .currentDX
+    jmp .ScheduleNextInterrupt
+
+
+; Called Indirectly from ZeroPage-IRQ @10-17
+.OpenBorderIrq:
+	pha:txa:pha:tya:pha                     ; __13  @23-30  Save Registers on stack
+    dec .vOpenBorderIndex                   ; 6
+    ldx .vCurrentColorLineIndex             ; 4
+    jmp .NextIrqNotOpenBorder               ; 3     @36-43
+
+.NextIrqOpenBorder:
+    ldx #.cPseudoOffsetOpenBorder           ; 2
+    bne .ColorChangeCont                    ; 3 -> +13
+
+; Called Indirectly from ZeroPage-IRQ @10-17
+.ColorChangeIrq:
+	pha:txa:pha:tya:pha                     ; __13  @23-30  Save Registers on stack
+    inc .vCurrentColorLineIndex             ; 6
+.ScheduleNextInterrupt:
+.vCurrentColorLineIndex = *+1
+    ldx #0                                  ; 2     @31-38
+
+    ;   DETREMINE Y:  0-ColorLine   1-LastIrq   2-OpenBorder
+.vOpenBorderIndex = *+1
+    cpx #$FF                                ; 2
+    beq .NextIrqOpenBorder                  ; 2/3 ->+8
+.NextIrqNotOpenBorder:                      ; @36-43
+.vAfterColorIrqIndex = *+1
+    cpx #$FF                                ; 2
+    bne .ColorChangeCont                    ; 2/3
+.vPseudoOffsetAfterColor = *+1
+    ldx #.cPseudoOffsetOffscreen            ; 2 __8/9 ->12/13
+
+.ColorChangeCont                            ;       @40-48
+!if ((>.vOpenBorderIndex) != (>.ColorChangeCont)) {
+	!error "Branches must be in same Page"
+}
+    lda .pColorChangeLinesLo,x              ; 4
+    sta vic_line                            ; 4     @48-56
+    
+    lda pBorderColors,x                     ; 4
+    ldy pBgColors,x                         ; 4     
+    sta vic_cborder                         ; 4
+    sty vic_cbg                             ; 4     @64-72 (1-9)     
+
+    ldy .pColorChangeVControl,x             ; 4
+    sty vic_controlv                        ; 4
+    
+    lda .pIrqHandlerLo,x                    ; 4
+    sta .pIrqZeroPageLo                     ; 3
+    lda .pIrqHandlerHi,x                    ; 4
+    sta .pIrqZeroPageHi                     ; 3     @23-31
+    
+.ReturnFromInterrupt:
+	pla:tay:pla:tax:pla                     ; 13 restore all registers
+	asl vic_irq			                    ; 6  enable next interrupt
+	rti                                     ; 6 __25 @48-56
+
+.SpriteDelayIrq:
+    pha:txa:pha:tya:pha ; 13    Save Registers on stack    ;@23-30
+
+    tsx                         ; 2     Store current Stack Pointer (will be messed up when the next IRQ occurs)
+    inc vic_line                ; 6     Reicht für den Bereich $FA-$FE, in dem wir hier operieren
+
+    ; Set up DoubleIRQ vector
+    lda #<.SpriteDelayIrq2      ; 2
+    sta .pIrqZeroPageLo         ; 3
+
+    ldy #$FF                    ; 2 active sprites
+    sty vic_sdy                 ; 4 stretch on
+    ldy .vCurrentColorLineIndex ; 4
+
+    asl vic_irq	; Ack  IRQ      ; 6
+    cli                         ; 2 __31    @54-61 ist immer ok, Sprites nie aktiv (Spritekoordinaten sind immer 1 größer als vic_line)
+
+    ; Execute NOPs until the raster line changes and the Raster IRQ triggers
+    nop : nop : nop : nop : nop : nop   ; last nop needeed for 65cycle NTSC-VIC : T66-73
+
+	; you should not get here, but this happens when something like a bad line messes up the timing
+-	lda #$02
+	sta $D020 ; indicate error by turning the frame RED
+    bne -
+
+.SpriteDelayIrq2:	; Innerhalb der neuen Rasterline sind bereits 10-11 Takte vergangen.
+!if (>.SpriteDelayIrq != >.SpriteDelayIrq2) {
+	!error "keep SpriteDelayIrq and SpriteDelayIrq2 on same page: ", .SpriteDelayIrq, " : ", .SpriteDelayIrq2
+}
+    txs                             ; 2    @12/13 Restore previous Stack Pointer (ignore the last Stack Manipulation by the IRQ)
+    ldx vic_line	                ; 4
+    inx                             ; 2    @18/19
+
+.SpriteDelayLoop:   ; enter @18/19 with x (next Line#)'s N in status
+
+    inc vic_sdy
+    dec vic_sdy                 ; __12  @30/31
+
+    txa                         ; 2
+    cmp .pColorChangePosLo,y    ; 4
+    beq *+3                     ; 2/3
+    and opcode_INY	            ; 3/2   __11  @41/42  and(zp) uses 3 cycles, inx 2 -> branch + use 5 cycles constant time
+
+    lda pBorderColors,y         ; 4
+    sta vic_cborder             ; 4
+    lda pBgColors,y             ; 4
+    sta vic_cbg                 ; 4 __16 @57/58, but sprites may already be displayed
+
+.vNTSCAndPadding = *
+    and .zpUnusedForTiming      ; 3  @60/61 ;; replace AND $zp ($25) with AND zp,x ($35) or INC zp ($E6) to waste 4 or 5 cycles instead of 3
+    
+    ; delay for sprites if not visible
+    inx                         ; 2
+    bpl +                       ; 2/3
+    pha : pla : inc .zpUnusedForTiming ; __12
++                               ; __16  @13/14
+
+
+.vSpritePosLoAdjusted = *+1
+    cpx #0
+    bne .SpriteDelayLoop        ; __5 @18/19
+!if (>* != >.SpriteDelayLoop) {
+	!error "Timing off due to page bounds"
+}
+    lda #0
+    sta vic_sdy
+    ldx #.cPseudoOffsetOffscreen
+    jmp .ColorChangeCont
+
+.BlinkCursor:
+    ;; cursor blink
+    dec .vCursorBlinkCounter
+    beq +
+    rts
++   lda #.cCursorBlinkFreq
+    sta .vCursorBlinkCounter
+.vCursorChar = *+1
+    lda #$20
+    eor #$80
+    sta .vCursorChar
+    jmp .BlitCharacterToSprite
+
+
+.pReadyScreenCodes: !scr "ready.hello,world"
+.BlitReady:
+-   jsr .BlitNextChar
+    ldx .vCursorPos
+    cpx #6
+    bne -
+    rts
+
+.BlitNextChar:
+    ldx .vCursorPos
+.vSpaceOnce = *+1
+    cpx #12
+    bne +
+    lda vic_xs6
+    clc
+    adc #8
+    sta vic_xs6
+    sta .vSpaceOnce
+    bne ++
++   lda .pReadyScreenCodes,x
+    jsr .BlitCharacterToSprite
+    inc .vCursorPos
+++  lda #$20
+    sta .vCursorChar
+    lda #1
+    sta .vCursorBlinkCounter
+    rts
+
+
+.PreDropAnimation:
+    jsr .BlinkCursor
+.vPreDropDelayIndex = *+1
+    ldx #0
+    dec .pPreDropDelays,x
+    bne .PreDropReturn
+    cpx #12
+    bne +
+    ldx #(.cGraphicModeFlags | $80)
+    stx .vOffscreenIrqLineHi
+    stx .vPreDropFinishFlag    
+    bne .PreDropReturn
++   inc .vPreDropDelayIndex
+    jsr .BlitNextChar
+.PreDropReturn:
+    jmp .ReturnFromInterrupt
+
+.pOffsetsPAL:    !byte 15,35,200,49
+;.pOffsetsNTSC64: !byte 40,10,200,25
+;.pOffsetsNTSC65: !byte 40,10,200,26
+
+!src "..\scroller\scroller_constants.a"
+!src "..\scroller\scroller_init_himem.a"
+
+Area0400:
+!pseudopc $0400{
+TransitionPart:
+.cTransitionCharLine = 12
+.cTransitionHorzLine = (8 * .cTransitionCharLine) + 51
+.cTransitionIrqLine = .cTransitionHorzLine - 15
+.cTransitionPartChar0 = 128
+.pTransitionLineStart = pVicTextPageBase+(.cTransitionCharLine*40)
+
+	+InitAfterScreenDropContents
+
+    ; copy Transition Charset
+    ldx #(9*8)
+-   lda .pTransitionCharset,x
+    sta pVicCharsetPageBase+(8*.cTransitionPartChar0),x
+    dex
+    bpl -
+    lda #0
+    sta vic_sactive
+    
+    lda #9                     ; 2
+    ldx #39                    ; 2
+-   sta $D800 + (.cTransitionCharLine*40),x; 5
+    dex                        ; 2
+    bpl -                      ; 3/2    
+    lda #viccolor_GRAY3
+    sta vic_cbg1
+    lda #viccolor_GRAY1
+    sta vic_cbg2
+    
+    sei
+  	lda #<.TransitionPartIrq
+  	sta cpu_irq
+  	lda #>.TransitionPartIrq
+  	sta cpu_irq+1
+    
+	lda vic_controlv
+    and #$78
+	sta vic_controlv
+	lda #.cTransitionIrqLine
+	sta vic_line
+	asl vic_irq			; enable next interrupt	
+    cli
+        
+    rts    
+
+.TransitionPartIrq: ; @7-14
+    pha:txa:pha:tya:pha ; Save Registers on stack -> 20-27
+    
+.vTransitionPartFrame = *+1
+    ldx #10
+    beq .TransitionPartEnd
+    dex
+    stx .vTransitionPartFrame
++   cpx #9
+    bcc +
+    lda #.cTransitionPartChar0
+    sta .pTransitionLineStart+19
+    lda #.cTransitionPartChar0+4
+    sta .pTransitionLineStart+20
+    jmp ReturnFromVicIrq
++   cpx #6
+    bcc +
+    inc .pTransitionLineStart+19
+    inc .pTransitionLineStart+20
+    jmp ReturnFromVicIrq
++   lda .pTransitionPartLineStart,x
+    ldy .pTransitionPartLineEnd,x
+    tax
+    lda #.cTransitionPartChar0+3
+    sta .pTransitionLineStart,x
+    lda #.cTransitionPartChar0+8
+    sty .vTransitionPartCmpEndLine
+-   inx
+    sta .pTransitionLineStart,x
+.vTransitionPartCmpEndLine = *+1    
+    cpx #39
+    bne -
+    lda #.cTransitionPartChar0+7
+    sta .pTransitionLineStart,x
+    jmp ReturnFromVicIrq
+    
+.TransitionPartEnd:         ; @25-32
+    lda #0                     ; 2
+    ldx #39                    ; 2
+-   sta .pTransitionLineStart,x; 5
+    sta pVicCharsetPageBase+(8*.cTransitionPartChar0),x ; 5
+    dex                        ; 2
+    bpl -                      ; 3/2    __ 15*40 + 3 = 603
+    
+    ldx #.cTransitionHorzLine
+-   cpx vic_line
+    bne -   ; @0-7
+
+    lda #1
+    ldx #10
+-   dex
+    bne -    ; 50+3 @53-60
+    
+.cTransitionLineColor = *+1
+    sta vic_cbg
+    sta vic_cborder
+    ldx #12
+-   dex
+    bne -
+    stx vic_cborder
+    stx vic_cbg
+
+    lda $D800                  ; 2
+    ldx #39                    ; 2
+-   sta $D800 + (.cTransitionCharLine*40),x; 5
+    dex                        ; 2
+    bpl -                      ; 3/2    
+    
+;	jsr $1003
+	+SignalRunNextPart
+    jmp ReturnFromVicIrq
+
+.pTransitionPartLineStart: !byte  0, 6,11,15,17,18
+.pTransitionPartLineEnd:   !byte 39,33,28,24,22,21  
+.pTransitionCharset:
+    !byte $00,$00,$00,$00,$01,$00,$00,$00
+    !byte $00,$00,$00,$02,$07,$02,$00,$00
+    !byte $00,$02,$01,$0B,$1F,$0B,$01,$02
+    !byte $00,$00,$08,$26,$7F,$26,$08,$00
+    !byte $00,$00,$00,$00,$40,$00,$00,$00
+    !byte $00,$00,$00,$80,$D0,$80,$00,$00
+    !byte $00,$80,$40,$E0,$F4,$E0,$40,$80
+    !byte $00,$00,$20,$98,$FD,$98,$20,$00   
+    !byte $00,$00,$00,$00,$FF,$00,$00,$00 
+}
+AfterArea0400:
+!warn "Area0400 size: ", (AfterArea0400 - Area0400)	
+

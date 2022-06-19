@@ -1,0 +1,146 @@
+; ResetRasterBarColors macht der RasterCode schon ! YAY! 800 cycles gespart!
+
+
+!zone SCROLLER_RASTERBARS
+
+!if <pLineBarCol != $00 {
+	!error "pLineBarCol must be at $xx00, else calculating offsets into table require additions"
+}
+
+.cRasterBarSpriteCount = 4
+
+; Color Data:
+;   !byte colors[20] zero-terminated
+; in den obersten 4 Bit der Farbe ist ein Z-Wert kodiert, der beim Blitten abgefragt werden kann. 
+; Ab 128 liegt VOR den Scrolltext
+;   
+; Sprite Data:
+;   sprite lo
+;   sprite hi
+;   sprite yoff
+;   
+;
+;  Frame Data: 
+;   SpriteIndex
+;   Duration   
+;   NextFrameIndex
+;   MovementTableHi
+;   MovementTableStart
+;   MovementOffset
+;
+;  Bar Data: 
+;   FrameIndex
+;   FrameCountDown
+;   PositionIndex
+
+BlitAllRasterBarSprites:
+    ldx #.cRasterBarSpriteCount         ; 2
+.blitAllRasterBarSpritesLoop
+    dex                                 ; 2
+    stx .vCurrentBarIndex               ; 4
+
+    ldy pBarFrameIndex, x               ; 4
+    dec pBarFrameCountDown, x           ; 6
+    bne .moveFrame                      ; 2/3
+    ; select next frame
+    lda pFrameNextFrameIndex, y         ; 4
+    sta pBarFrameIndex, x               ; 5
+    tay                                 ; 2
+    lda pFrameDuration, y               ; 4
+    sta pBarFrameCountDown, x           ; 5
+    lda pFrameMovementPosStart, y       ; 4
+    jmp .nextFrameFinish                ; 3
+.moveFrame    
+    lda pBarPositionIndex, x            ; 4    
+    clc                                 ; 2
+    adc pFrameMovementOffset, y         ; 4
+.nextFrameFinish    ; A: Position index   X: BarIndex   Y: FrameIndex     NextFrame: __39  MoveFrame: __28
+    sta pBarPositionIndex, x            ; 5
+    tax                                 ; 2 X: Movement table offset
+.wLoadBarPosition
+    lda DATA_SinBarMove1, x             ; 5  A: MoveTable[BarPosIndex]
+    ldx pFrameSpriteIndex, y            ; 4  X: SpriteIndex
+    clc                                 ; 2
+    adc pSpriteYOff, x                  ; 4     
+    sta .vLineYOffset1                  ; 4
+    sta .vLineYOffset2                  ; 4
+    lda pSpriteDataHi, x                ; 4
+    sta .wLoadSpriteData+2              ; 4
+    lda pSpriteDataLo, x                ; 4
+    sta .wLoadSpriteData+1              ; 4     __49                            
+    ldy #$0
+    jmp .wLoadSpriteData                ; 3     prepare line Loop:  NextFrame: __91+11  MoveFrame: __80+11
+.vLineYOffset1 = *+1
+-   cmp pLineBarCol, y                  ; 4
+    bcc +                               ; 2/3
+.vLineYOffset2 = *+1
+    sta pLineBarCol, y                  ; 5
++   iny                                 ; 2
+.wLoadSpriteData    
+    lda $1000, y                        ; 4    
+    bne -                               ; 2/3   : 20*height + NextFrame = 502 for 20 zeilen, 222 für 6 Zeilen
+
+.vCurrentBarIndex = *+1
+    ldx #0                              ; 2
+    bne .blitAllRasterBarSpritesLoop    ; 3 _11
+
+.endBlitAllRasterBarSprites
+    jmp RasterBarEffectReturn           ; 3
+    
+    
+; Color Data:
+pBarColorData0:
+    !byte $00, $00
+pBarColorData1:
+    !byte $E6, $E4, $E3, $E1, $E1, $E3, $E1, $E3, $E4, $E3, $E4, $E6, $E4, $E6, $E0, $E6, $00
+pBarColorData2:
+    !byte $E6, $E4, $E3, $E1, $E1, $E3, $E3, $E4, $E3, $E4, $E6, $E4, $E6, $E0, $E6, $00
+pBarColorData3:
+    !byte $E6, $E4, $E3, $E1, $E1, $E3, $E3, $E4, $E4, $E6, $E4, $E6, $EB, $00
+pBarColorData4:
+    !byte $16, $14, $13, $13, $14, $16, $14, $16, $16, $1B, $16, $00
+pBarColorData5:
+    !byte $16, $14, $13, $14, $14, $14, $16, $16, $1B, $00
+pBarColorData6:
+    !byte $16, $14, $14, $14, $16, $16, $1B, $00
+pBarColorData7:
+    !byte $E9, $E2, $EA, $E7, $E7, $EA, $E7, $EA, $E2, $EA, $E2, $E9, $E2, $E9, $E0, $E9, $00
+pBarColorData8:
+    !byte $E9, $E2, $EA, $E7, $E7, $EA, $EA, $E2, $EA, $E2, $E9, $E2, $E9, $E0, $E9, $00
+pBarColorData9:
+    !byte $E9, $E2, $EA, $E7, $E7, $EA, $EA, $E2, $E2, $E9, $E2, $E9, $EB, $00
+pBarColorDataA:
+    !byte $19, $12, $1A, $1A, $12, $19, $12, $19, $19, $1B, $19, $00
+pBarColorDataB:
+    !byte $19, $12, $1A, $12, $12, $12, $19, $19, $1B, $00
+pBarColorDataC:
+    !byte $19, $12, $12, $12, $19, $19, $1B, $00
+
+
+    
+cColorDataMaxLen = pBarColorData2 - pBarColorData1
+    
+; Sprite Data:    
+pSpriteDataLo: !byte <pBarColorData0, <pBarColorData1, <pBarColorData2, <pBarColorData3, <pBarColorData4, <pBarColorData5, <pBarColorData6
+                                !byte <pBarColorData7, <pBarColorData8, <pBarColorData9, <pBarColorDataA, <pBarColorDataB, <pBarColorDataC
+pSpriteDataHi: !byte >pBarColorData0,  >pBarColorData1, >pBarColorData2, >pBarColorData3, >pBarColorData4, >pBarColorData5, >pBarColorData6
+                                 !byte >pBarColorData7, >pBarColorData8, >pBarColorData9, >pBarColorDataA, >pBarColorDataB, >pBarColorDataC
+pSpriteYOff: !byte $00, $00, $01, $02, $03, $04, $05, $00, $01, $02, $03, $04, $05
+cCountRasterBarSpriteData = $C
+cLongestBarSpriteIndex = 1
+    
+;  Frame Data:                     #0   #1   #2   #3   #4   #5   #6   #7   #8   #9   #A   #B   #C   #D   #E   #F  #10  #11  #12  #13  #14  #15
+pFrameSpriteIndex:          !byte $00, $07, $08, $09, $0A, $0B, $0C, $0B, $0A, $09, $08, $01, $02, $03, $04, $05, $06, $05, $04, $03, $02, $00
+pFrameDuration:             !byte $FF, $1C, $19, $19, $19, $19, $1C, $19, $19, $19, $19, $1C, $19, $19, $19, $19, $1C, $19, $19, $19, $19, $FF
+pFrameNextFrameIndex:       !byte $06, $02, $03, $04, $05, $06, $07, $08, $09, $0A, $01, $0C, $0D, $0E, $0F, $10, $11, $12, $13, $14, $0B, $10
+pFrameMovementPosStart:     !byte $00, $32, $4E, $67, $80, $99, $B2, $CE, $E7, $00, $19, $32, $4E, $67, $80, $99, $B2, $CE, $E7, $00, $19, $00
+pFrameMovementOffset:       !byte $00, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $00
+    
+;  Bar Data: 
+pBarFrameIndex:             !byte $00, $15, $00, $15
+pBarFrameCountDown:         !byte $4F, $7F, $BF, $FF
+pBarPositionIndex:          !byte $00, $00, $00, $00
+    
+    
+;pBar0 : !byte                   $E1,    
+;1,1,1,1,D,1,D,D,3,D,3,3,A,3,A,A,4,A,4,4,C,4,C,C,6,6,0,6

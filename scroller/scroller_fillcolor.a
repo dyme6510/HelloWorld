@@ -1,0 +1,249 @@
+!src "..\..\nd_proj\scroller\scroller_constants.a"
+
+!zone FillColorEffectZone
+
+!align $FF,0
+
+.pAnimateFillColors:
+.pGrad1:
+    !byte $0,$0,$0,$0,$0,$0,$0,$0
+    !byte $0,$6,$B,$4,$E,$5,$3,$D,$1
+    !byte $1,$1,$1,$1,$1,$1,$1,$1
+.pGrad2:
+    !byte $0,$0,$0,$0,$0,$0,$0,$0
+    !byte $0,$9,$2,$8,$C,$A,$F,$7,$1
+    !byte $1,$1,$1,$1,$1,$1,$1,$1
+.pGoldLoop = * ; 32+8 bytes
+	!byte $09, $02, $08, $05, $0D, $07, $01, $07, $0D, $05, $08, $02, $09, $0B, $00, $0B
+	!byte $0C, $0F, $03, $0A, $02, $09, $08, $07, $0D, $05, $09, $0B, $0C, $0F, $0C, $0B
+	!byte $09, $02, $08, $05, $0D, $07, $01, $07
+   
+   
+
+    !if (>.pAnimateFillColors != >(*-1)){
+        !error "pAnimateFillColors must fit on a single page: ", .pAnimateFillColors, " - ", (*-1)
+    }        
+
+.pAnimateFillFadeBase:
+    !byte <(.pGrad1 + 0)   ; 0
+    !byte <(.pGrad1 + 8)   ; 1
+    !byte <(.pGrad2 + 2)   ; 2
+    !byte <(.pGrad1 + 6)   ; 3
+    !byte <(.pGrad1 + 3)   ; 4
+    !byte <(.pGrad1 + 5)   ; 5
+    !byte <(.pGrad1 + 1)   ; 6
+    !byte <(.pGrad2 + 7)   ; 7
+    !byte <(.pGrad2 + 3)   ; 8
+    !byte <(.pGrad2 + 1)   ; 9
+    !byte <(.pGrad2 + 5)   ; A
+    !byte <(.pGrad1 + 2)   ; B
+    !byte <(.pGrad2 + 4)   ; C
+    !byte <(.pGrad1 + 7)   ; D
+    !byte <(.pGrad1 + 4)   ; E
+    !byte <(.pGrad2 + 6)   ; F       
+    
+.pAnimateFillOffsets:
+.pFO_GradA:
+    !byte <.pGrad1+6, <.pGrad1+4, <.pGrad1+1, <.pGrad1+0, <.pGrad1+0, <.pGrad1+1, <.pGrad1+4, <.pGrad1+6
+.pFO_GradB:
+    !byte <.pGrad2+1, <.pGrad2+3, <.pGrad2+5, <.pGrad2+7, <.pGrad1+5, <.pGrad1+2, <.pGrad1+0, <.pGrad1+1
+.pFO_GradC:
+    !byte <.pGrad1+2, <.pGrad1+0, <.pGrad1+2, <.pGrad2+4, <.pGrad2+6, <.pGrad1+6, <.pGrad1+8, <.pGrad1+6
+    
+.pFO_GoldLoopUp:
+    !byte <.pGoldLoop+7, <.pGoldLoop+6, <.pGoldLoop+5, <.pGoldLoop+4, <.pGoldLoop+3, <.pGoldLoop+2, <.pGoldLoop+1, <.pGoldLoop+0
+    
+    !if (>.pAnimateFillOffsets != >(*-1)){
+        !error "pAnimateFillOffsets must fit on a single page: ", .pAnimateFillOffsets, " - ", (*-1)
+    }
+.OFF_GoldUp = .pFO_GoldLoopUp - .pAnimateFillOffsets
+.OFF_GradA = .pFO_GradA - .pAnimateFillOffsets
+.OFF_GradB = .pFO_GradB - .pAnimateFillOffsets
+.OFF_GradC = .pFO_GradC - .pAnimateFillOffsets
+.OFF_CURRENT = $FF
+    
+
+    
+.pAnimateFillCommandData:    ; OFF              FROM    TO
+.pCMD_ToWhite:           !byte .OFF_CURRENT,    9,      15
+.pCMD_ToBlack:           !byte .OFF_CURRENT,    7,      0
+.pCMD_FadeInA0:          !byte .OFF_GradA,      1,      8
+.pCMD_FadeInA1:          !byte .OFF_GradA,      14,     8
+.pCMD_FadeInB0:          !byte .OFF_GradB,      1,      8
+.pCMD_FadeInB1:          !byte .OFF_GradB,      14,     8
+.pCMD_FadeInC0:          !byte .OFF_GradC,      1,      8
+.pCMD_FadeInC1:          !byte .OFF_GradC,      14,     8
+.pCMD_GoldenRotation:    !byte .OFF_GoldUp,     0,      31
+
+.CMD_ToWhite = .pCMD_ToWhite - .pAnimateFillCommandData
+.CMD_ToBlack = .pCMD_ToBlack - .pAnimateFillCommandData
+.CMD_FadeInA0 = .pCMD_FadeInA0 - .pAnimateFillCommandData
+.CMD_FadeInA1 = .pCMD_FadeInA1 - .pAnimateFillCommandData
+.CMD_FadeInB0 = .pCMD_FadeInB0 - .pAnimateFillCommandData
+.CMD_FadeInB1 = .pCMD_FadeInB1 - .pAnimateFillCommandData
+.CMD_FadeInC0 = .pCMD_FadeInC0 - .pAnimateFillCommandData
+.CMD_FadeInC1 = .pCMD_FadeInC1 - .pAnimateFillCommandData
+.CMD_GoldenRotation = .pCMD_GoldenRotation - .pAnimateFillCommandData
+
+
+
+.pAnimateFillCommandOff = .pAnimateFillCommandData
+.pAnimateFillCommandFrom = .pAnimateFillCommandData+1
+.pAnimateFillCommandTo = .pAnimateFillCommandData+2
+    
+
+.cmdLOOP = $A0
+.cmdEND = $A1
+.cmdWAIT = $A2
+pAnimateFillCmd_FirstDrop:  !byte .CMD_ToWhite,.CMD_FadeInA1 ; -> cEnd
+pAnimateFillCmd_Empty:      !byte .cmdEND
+pAnimateFillCmd_MainLoop:   !byte .CMD_ToBlack, .CMD_FadeInB0, .cmdWAIT+30
+                            !byte .CMD_GoldenRotation
+                            !byte .CMD_ToWhite, .CMD_FadeInA1, .cmdWAIT+30
+                            !byte .CMD_ToBlack, .CMD_FadeInC0, .cmdWAIT+30
+                            !byte .cmdLOOP
+
+
+;; special values:
+;; Command #0: No Command
+;; all negative offsets: use .pGrad1/.pGrad2 according to current colors
+
+
+!macro AnimateFillStartCommandSequence .Ptr{
+    ldx #<.Ptr
+    ldy #>.Ptr
+    jsr AnimateFillInitCommandSequence
+}
+AnimateFillInitCommandSequence:
+    stx vAnimateFillCurrentCommandSequence
+    sty vAnimateFillCurrentCommandSequence+1
+    ldx .vAnimateFillCurrentOffset
+    stx .vAnimateFillEndOffset
+    ldx #0
+    stx vAnimateFillCurrentCommandSequenceIndex
+    rts
+
+.AnimateFill_Step0_Apply:
+.vAnimateFillCurrentOffset = *+1
+    ldx #0
+.vAnimateFillPos0 = *+1
+!for .X, 0, COUNT_MULTICOLOR_ENTRIES-1{
+    lda .pAnimateFillColors,x
+    sta pMultiBgColor+.X
+}   ; __66
+.cAnimateFillPosOffset = (*-(.vAnimateFillPos0-1)) / COUNT_MULTICOLOR_ENTRIES
+    +SetJmpDstReturn AnimateFillJmp, .AnimateFill_Step1_CheckNext ; returns -> __81    
+ 
+ 
+AnimateFill_InitalLoop: 
+.AnimateFill_Step1_CheckNext:
+    ldx .vAnimateFillCurrentOffset
+.vAnimateFillEndOffset = *+1
+    cpx #0
+    bne .AnimateFill_Step1_CheckNext_Continue       ; returns -> __30
+vAnimateFillCurrentCommandSequenceIndex = *+1 
+    ldx #0                                  ; 10
+vAnimateFillCurrentCommandSequence = *+1
+-   ldy pAnimateFillCmd_Empty,x
+    cpy #.cmdLOOP                                   ; $FE: LOOP, $FF: END
+    bne +
+    ldx #0
+    beq -
++   inx                                     ; 34
+    bcs .AnimateFill_Step1_CheckNext_EndCmd
+    stx vAnimateFillCurrentCommandSequenceIndex    
+    sty .vAnimateFillCurrentParseCmd        ; 44
+    
+    lda .pAnimateFillCommandFrom,y
+    sta .vAnimateFillCurrentOffset
+    lda .pAnimateFillCommandTo,y
+    sta .vAnimateFillEndOffset              ; 60
+    +SetJmpDstReturn AnimateFillJmp, .AnimateFill_Step2_SetOffsets    ; returns -> __75
+    
+.AnimateFill_Step1_CheckNext_Continue:
+.vAnimateFillDirection:
+    inc .vAnimateFillCurrentOffset
+    +SetJmpDstReturn AnimateFillJmp, .AnimateFill_Step2_Continue ; ->__30    
+.AnimateFill_Step1_CheckNext_EndCmd:
+    cpy #.cmdEND
+    beq +
+    stx vAnimateFillCurrentCommandSequenceIndex
+    sty .vAnimateFillEndOffset
+    lda #.cmdWAIT
+    sta .vAnimateFillCurrentOffset
+    +SetJmpDst AnimateFillJmp, .AnimateFill_WaitDelay ; 71
++   jmp AnimateFillReturn        ; __32, STAYS STEP 1
+
+.cAnimateFillWaitDelay_Unit = 8;
+.vAnimateFillWaitDelayCounter: !byte .cAnimateFillWaitDelay_Unit
+.AnimateFill_WaitDelay:
+    ldx .vAnimateFillCurrentOffset
+    cpx .vAnimateFillEndOffset
+    beq .AnimateFill_WaitDelay_Finish    
+    dec .vAnimateFillWaitDelayCounter
+    bne +
+    ldx #.cAnimateFillWaitDelay_Unit
+    stx .vAnimateFillWaitDelayCounter
+    inc .vAnimateFillCurrentOffset
++   jmp AnimateFillReturn
+.AnimateFill_WaitDelay_Finish:    
+    +SetJmpDstReturn AnimateFillJmp, .AnimateFill_Step1_CheckNext
+    
+.AnimateFill_Step2_Continue:    
+    +SetJmpDstReturn AnimateFillJmp, .AnimateFill_Step3_Continue ;__15    
+
+.AnimateFill_Step2_SetOffsets:
+    lda .vAnimateFillEndOffset
+    cmp .vAnimateFillCurrentOffset          ; 8
+    lda #opcode_INC_16
+    bcs +
+    eor #(opcode_INC_16 XOR opcode_DEC_16)
++   sta .vAnimateFillDirection              ; 18 (max)
+
+.vAnimateFillCurrentParseCmd = *+1 
+    ldx #0    
+    ldy .pAnimateFillCommandOff,x
+    cpy #$FF
+    bne .AnimateFill_SetOffsets_Explicit
+
+.AnimateFillSetTableToCurrentColors: 
+!for .X, 0, 2{
+    ldx pMultiBgColor+.X
+    lda .pAnimateFillFadeBase,x
+    sta .vAnimateFillPos0 + (.X * .cAnimateFillPosOffset)
+}
+    +SetJmpDstReturn AnimateFillJmp, .AnimateFill_Step3_Finalize_CurrentColors
+    ; __79
+    
+.AnimateFill_SetOffsets_Explicit: 
+!for .X, 0, 1{
+    lda .pAnimateFillOffsets+.X,y
+    sta .vAnimateFillPos0 + (.X * .cAnimateFillPosOffset)
+}
+    +SetJmpDstReturn AnimateFillJmp, .AnimateFill_Step3_Finalize_Explicit
+    ; __61
+
+
+
+.AnimateFill_Step3_Continue:    
+    +SetJmpDstReturn AnimateFillJmp, .AnimateFill_Step0_Apply ;__15    
+
+.AnimateFill_Step3_Finalize_Explicit:
+    ldx .vAnimateFillCurrentParseCmd
+    ldy .pAnimateFillCommandOff,x
+!for .X, 2, COUNT_MULTICOLOR_ENTRIES-1{
+    lda .pAnimateFillOffsets+.X,y
+    sta .vAnimateFillPos0 + (.X * .cAnimateFillPosOffset)
+}
+    jmp .AnimateFill_Step3_Finalize_End ; -> 59
+
+.AnimateFill_Step3_Finalize_CurrentColors:
+!for .X, 3, COUNT_MULTICOLOR_ENTRIES-1{
+    ldx pMultiBgColor+.X
+    lda .pAnimateFillFadeBase,x
+    sta .vAnimateFillPos0 + (.X * .cAnimateFillPosOffset)
+}   ; 60
+    
+.AnimateFill_Step3_Finalize_End:
+    +SetJmpDstReturn AnimateFillJmp, .AnimateFill_Step0_Apply ; -> 75 / 74
+

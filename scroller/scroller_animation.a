@@ -1,0 +1,323 @@
+
+!src "..\..\nd_proj\scroller\scroller_constants.a"
+!src "..\..\nd_proj\scroller\scroller_charcolor.a"
+!src "..\..\nd_proj\scroller\scroller_fillcolor.a"
+
+!zone SCROLLER_ANIMATION
+
+; Tabellen zur Zerlegung in x&7 und	x&F8>>3
+.pTableXScrollValue = DATA_TableXScrollValue
+.pTableTextPageIndex = DATA_TableXScrollTextPage
+
+.zpCharColorBase = $12
+vCurrentFrameNumber: !word $0000
+
+vFirstTextPageIndex = .vFirstTextPageIndexImm      ; Index of Textpage with leftmost text    
+
+.cInitY = $30
+
+;vScrollerXOffset:     	!byte $6	; X-Offset (0-7)
+;vScrollerYOffset:     	!byte $6	; X-Offset (0-7)
+;vScrollerWobbleTable = DATA_Sin64
+
+;   Score:
+;   1. Animate pLineBarColBack : grow from 1 line to Back Ribbon
+;   2. Scrolltext starts, solid fill (3s?)
+;   3. Bounce (flash fill)
+;   4. Wobble (flash fill)
+;   5. Copperbar-Sprites show up
+;   6. Diverse multicolor fill animations + charcolor
+;   End:
+;   fill pLineBarColBack with F0, when everything is Black -> transition part for cleaning everything up (pic?)
+;
+;
+;
+
+!warn "Animation Start: ", *
+AnimationSubRoutine:
+    ; music
+    jsr $1003
+	jsr ScrollTextStep
+
+RasterBarEffect:
+    jmp RasterBarEffectReturn
+RasterBarEffectReturn:
+
+	
+; MAP: bit 1-3: textpage. bit 0: charset    ->      Bit 7..4: TextPage BaseAddr;  Bit 3..1: Charset BaseAddr.    
+; input parameter: vScrollerWobbleTable (64b read), vScrollerNextYOffset, vScrollerXOffset
+CalcXScrollValues:    
+.vScrollerNextYOffset = *+1	
+    ldy #.cInitY
+    sty vScrollerYOffset
+    
+    ldy #$00
+    sty .vCharLineStart
+    
+    clc
+    lda #<.pTableXScrollValue
+vScrollerXOffset = *+1	
+    adc #6                				;           : carry is always clear after here
+    sta .fetchScrollerXOffset
+        ; carry must be clear here
+    lda #<.pTableTextPageIndex
+    adc vScrollerXOffset                ;           : carry is always clear after here
+    sta .fetchScrollerTextPageIndex
+
+    
+.startNextCharacterLine
+    lda #$7F                            ; 2
+    sta .vCurrentCharacterLineMinX      ; 4
+    tya                                 ; 2
+    adc #$08                            ; 2         : carry is always clear after here
+    sta .vNextCharacterLineStart1       ; 4         : __16 * 8
+
+.loopAllY                                                   ; ~ 2500 cycles incl. .startNextCharacterLine
+
+    ; calc A: total x-offset for this rasterline	: __22  * 8*8
+vScrollerWobbleTable = *+1
+    ldx DATA_IntroWobble,y          ; 4
+.fetchScrollerXOffset = *+1    
+    lda .pTableXScrollValue, x      ; 4
+    sta pLineXScroll,y		        ; 5
+.fetchScrollerTextPageIndex = *+1    
+    lda .pTableTextPageIndex, x     ; 4
+    sta pLineCharset,y		        ; 5
+
+.vCurrentCharacterLineMinX = *+1    
+    cmp #$00                        ; 2
+    bcs +			                ; 2/3
+    sta .vCurrentCharacterLineMinX	; 4
++   iny								; 2
+.vNextCharacterLineStart1 = *+1
+    cpy #$00						; 2             : carry is always set here
+    bne .loopAllY					; 3				: __15  * 8*8
+    
+.finishCharLine                                     ; ~2000 cycles
+    lda .vCurrentCharacterLineMinX  ; 4
+    sta .vCurrentCharacterLineMinX2 ; 4
+    sty .vNextCharacterLineStart2   ; 4
+    
+.vFirstTextPageIndexImm = *+1                           ; Index of Textpage with leftmost text    
+	lda	#0			                ; 4
+    clc
+    adc .vCurrentCharacterLineMinX  ; 4             : carry is always clear here
+    tax                             ; 2
+    ldy .pCharsetAndTextPageMap, x   ; 4 
+    sty .vCharSetValue1             ; 4
+
+.vCharLineStart = *+1
+    ldy #$00                            ; 2     __34 * 8
+.vCharSetValue1 = *+1
+-   lda #$00                            ; 2
+
+    ; Maskierung durch pLineBarCol
+vScrollerYOffset = *+1   
+    ldx pLineBarCol+.cInitY, y          ; 4
+    bpl+                                ; 2/3
+    and #$F0                            ; 2       = __8 * 8*8 = 512 ; das EMPTY-Set ist immer auf 00
+    jmp .finalCharSetVar                ; 3, skips 9/10 
+
+    ; Rightshift 8 durch Charset
++   ldx pLineCharset,y		            ; 4     
+.vCurrentCharacterLineMinX2 = *+1    
+    cpx #$00                            ; 2
+    beq .finalCharSetVar                ; 2/3
+    ora #$02                            ; 2     Charsets: Rechts immer Links OR 2, das EMPTY-Set ist immer auf 00    
+    
+.finalCharSetVar                        ;       in Loop : MASK=13 SHIFT8=17 NORMAL=16
+    sta pLineCharset,y				    ; 5    
+    iny                                 ; 2
+.vNextCharacterLineStart2 = *+1
+    cpy #$00                            ; 2
+    bne -                               ; 2/3   __25/29/28  __24 * 8*8
+    sty .vCharLineStart                 ; 4
+
+    cpy #cScrollTextHeightRasterLines   ; 2
+    bne .startNextCharacterLine         ; 2/3   __9 * 8
+  
+    ; Next Frame number
+    inc vCurrentFrameNumber
+    bne +
+    inc vCurrentFrameNumber+1
++   
+
+CharColorEffect:
+    jmp CharColorEffectReturn
+CharColorEffectReturn:
+AnimateFillJmp:
+    jmp AnimateFill_InitalLoop
+AnimateFillReturn:
+.AnimationSceneJmp:
+    jmp .AnimateIntro   ; returns
+.AnimationSceneReturn:
+    
+    
+.AnimateAll:
+    ; bounce text
+.vYBounceTablePos = *+1	
+    lda DATA_BounceTab
+    sta .vScrollerNextYOffset
+	inc .vYBounceTablePos
+    
+    inc vScrollerWobbleTable
+        
+    ldx vCurrentFrameNumber
+    cpx #$FF
+    bne +
+    ldx #$0
+    jsr StartCharColorEffect
+
+vCurrentTextCommand = *+1
+    ldy #0
+    bne .ParseTextCommand
++   rts
+
+.ParseTextCommand:
+    ldx #0
+    stx vCurrentTextCommand
+    dey
+    beq AnimateStartDissolve
+    rts
+
+AnimateStartDissolve:
+    +SetJmpDst RasterBarEffect, DissolveRasterBarsStep
+    rts
+
+DissolveRasterBarsStep:
+.vDissolveSpriteIndex = *+1
+-   ldx #cCountRasterBarSpriteData-1
+    bne +
+    ldx #cCountRasterBarSpriteData-1
++   lda pSpriteDataHi,x
+    sta .DissolveRasterBarTestHi
+    ldy pSpriteDataLo,x
+.DissolveRasterBarTestHi = *+2    
+    lda $FF00,y
+    bne +
+    cpx #cLongestBarSpriteIndex
+    bne ++
+.EndDissolveRasterBars:
+    +SetJmpDst RasterBarEffect, DissolveBackgroundStep
++   inc pSpriteDataLo,x
+++  dex
+    stx .vDissolveSpriteIndex
+    jmp BlitAllRasterBarSprites
+
+DissolveBackgroundStep:
+    lda #$F0
+.vDissolveBackgroundStepPos1 = *+1
+    sta pLineBarColBack+0
+.vDissolveBackgroundStepPos2 = *+1
+    sta pLineBarColBack+cLineBarColBackLen-2
+    inc .vDissolveBackgroundStepPos1
+    dec .vDissolveBackgroundStepPos2
+    lda .vDissolveBackgroundStepPos1
+    cmp .vDissolveBackgroundStepPos2
+    bcc +
+.EndDissolveBackgroundStep:
+    ; disable gfx
+    lda vic_controlv
+    and #$EF
+    sta vic_controlv
+    +SignalRunNextPart
+    jsr JustMusicIrq
++   jmp RasterBarEffectReturn
+
+    
+.pCharsetAndTextPageMap: ; doppelt, um beim bilden eines Offsets nicht noch clippen zu müssen
+!for .DoppeltFuerOffset, 0, 1{  ; Bei den Charsets muss das rechte immer (links or 2) sein 
+	!byte $24, $34, $84, $94, $A4, $B4, $C4, $D4, $E4, $F4 ; 0-1 ist BLANK-Charset, 4-7 Charsets A und B
+}
+    
+
+.cIntroStartLineIndex = 80                        
+
+.pIntroBorderColors:    !byte viccolor_BLACK, viccolor_WHITE + $60, viccolor_GRAY3 + $60, viccolor_GRAY2 + $60, $FF
+!if >.pIntroBorderColors != >* {
+	!error ".pIntroBorderColors must fit on same Page: " , .pIntroBorderColors, " - ",*
+}
+
+.AnimateIntro:
+
+.vAnimateIntroFrame = *+1
+    ldx #cIntroOffsetsFrameCount-1
+    lda DATA_IntroOffsets,x
+    sta .vIntroWidth
+
+    ldx #.cIntroStartLineIndex
+    ldy #.cIntroStartLineIndex
+    lda #viccolor_GRAY1 + $60
+-   sta pLineBarColBack,y
+    sta pLineBarColBack,x
+    dey
+    inx
+.vIntroWidth = *+1
+    cpx #1
+    bcc -
+
+    lda #<.pIntroBorderColors
+    sta .vIntroLoadBorderColor + 1   
+.vIntroLoadBorderColor:    
+-   lda .pIntroBorderColors
+    bmi +
+    inc .vIntroLoadBorderColor + 1
+    sta pLineBarColBack,y
+    sta pLineBarColBack,x
+    iny
+    dex
+    bne -    
++   dec .vAnimateIntroFrame
+    bpl +
+    +SetJmpDst .AnimationSceneJmp, .AnimateStep1    
++   rts
+
+.AnimateStep1:
+
+.vStep1CountFramesUntilBounce = *+1
+	ldx #100
+	beq +
+	dec .vStep1CountFramesUntilBounce
+	rts
++	
+.vStep1FirstDropOnce = *+1
+    ldx #0
+    bne +
+    +AnimateFillStartCommandSequence pAnimateFillCmd_FirstDrop
+    inc .vStep1FirstDropOnce
+.vYBounceTablePosStep1 = *+1
++   lda DATA_BounceTab+$2b
+    sta .vScrollerNextYOffset
+	inc .vYBounceTablePosStep1
+	
+.vStep1CountFramesUntilWobble = *+1
+	ldx #160
+	beq +
+	dec .vStep1CountFramesUntilWobble
+    bne ++
+    ldx #0
+    +AnimateFillStartCommandSequence pAnimateFillCmd_MainLoop    
+    jsr StartCharColorEffect
+++	rts
+.vStep1CopyWobbleLength = *+1    
++   ldx #55    
+	beq +
+    ldy #0
+-   lda DATA_Sin64,y
+    sta DATA_IntroWobble,x
+    iny
+    inx
+    cpx #64
+    bne -
+    dec .vStep1CopyWobbleLength
+    rts
++   lda #<DATA_Sin64
+    sta vScrollerWobbleTable
+    lda #>DATA_Sin64
+    sta vScrollerWobbleTable+1
+    +SetJmpDst .AnimationSceneJmp, .AnimateAll 
+    +SetJmpDst RasterBarEffect, BlitAllRasterBarSprites 
+    lda .vYBounceTablePosStep1
+    sta .vYBounceTablePos
+    rts
+

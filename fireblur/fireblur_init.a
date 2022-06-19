@@ -1,0 +1,302 @@
+; GFX-Mode: 4x4 (Chars w 4x4 colors, encoded %BRblTRtl), 00 is black, 11 is white
+
+!ZONE FIREBLUR_INIT
+
+.cSelectCharSet = (>pcCharSet >> 2) & $0E
+
+.cBlurColor0 = viccolor_BLACK
+.cBlurColor1 = viccolor_ORANGE
+.cBlurColor2 = viccolor_YELLOW
+.cBlurColor3 = viccolor_WHITE
+
+FireBlurInit:
+
+    jsr InitScreen
+    dec $01
+    jsr GenerateFireCharset
+    jsr GenerateBlurTables
+    jsr UnpackMoveTables
+    jsr MoveSpriteData
+    jsr InitBlitSpriteTables
+    jsr CalcSpritesData
+    inc $01
+    jsr InitSpriteMultiplexer
+    rts
+
+
+.cVicBank = (>pcCharSet >> 6)
+
+InitScreen:
+
+    ;forecround-color
+    lda #.cBlurColor3 | 0x08
+    ldx #$d8
+    ldy #$db
+    jsr InitPagesX2Y
+
+    ; clear sprite data
+    ldx #>cSpriteAndAnimationDataStart
+    ldy #>(cSpriteAndAnimationDataEnd-1)
+    jsr ClearPagesX2Y
+
+    ; cls 4 Textscreens
+    ldx #>pcTextPagesStart
+    ldy #(>pcTextPagesStart) + 15
+    jsr ClearPagesX2Y
+
+    ; clear sprite charmaps
+    ldx #>pSpriteCharDataBasePtr
+    ldy #(>pSpriteCharDataBasePtr) + cSpriteCount - 1
+    jsr ClearPagesX2Y
+
+    ; vic-bank
+    lda cia2_ddra
+    ora #3
+    sta cia2_ddra
+    lda cia2_pra
+    and #%11111100
+    ora #(3-.cVicBank)
+    sta cia2_pra
+
+    ; vic-ram
+    lda #((>pcTextPage0 << 2) & $F0) | ((>pcCharSet >> 2) & $0E)
+    sta vic_ram
+    lda #0
+    sta vic_sactive
+    
+    ; colors
+    lda #.cBlurColor0
+    sta vic_cbg
+    sta vic_cborder
+    lda #.cBlurColor2
+    sta vic_cbg1
+    lda #.cBlurColor1
+    sta vic_cbg2
+
+    ; Multicolor 24x38 mode
+    lda vic_controlv
+    and #%01110111
+    sta vic_controlv
+    lda vic_controlh
+    ora #$10
+    and #%11110111
+    sta vic_controlh
+    rts
+
+
+!zone FIREBLUR_INIT_Charset
+GenerateFireCharset:
+    ldy #0
+    beq .NextChar
+.NextData:
+    iny
+    cpy #16
+    beq .End
+    tya
+    rol : rol : rol
+    sta .DstUpper
+    lda #>pcCharSet
+    sta .DstUpper+1
+.NextChar:
+    lda .CharData,y
+    ldx #4
+-   dex
+.DstUpper = *+1
+    sta pcCharSet,x
+.DstLower = *+1
+    sta pcCharSet+4,x
+    bne -
+    lda .DstLower
+    sta .TestNegChange
+    clc
+    adc #8
+    sta .DstLower
+    bcc +
+    inc .DstLower+1
+.TestNegChange = *+1
++   eor #0
+    bmi .NextData
+    lda .DstUpper
+    eor #$80
+    bmi +
+    inc .DstUpper+1
++   sta .DstUpper
+    jmp .NextChar
+.End:
+    rts
+.CharData:
+    !byte %........, %#.#....., %.#.#...., %####....
+    !byte %....#.#., %#.#.#.#., %.#.##.#., %#####.#.
+    !byte %.....#.#, %#.#..#.#, %.#.#.#.#, %####.#.#
+    !byte %....####, %#.#.####, %.#.#####, %########
+
+
+!zone FIREBLUR_INIT_BlurTables
+.zpTL = $E0
+.zpTR = $E1
+.zpBL = $E2
+.zpBR = $E3
+GenerateBlurTables:
+    ldy #0
+.Continue:
+
+    ;; SplitValues :: TR(*4)-TL, BL(*4)-BR
+    tya
+    and #cMaskTop
+    ldx #cMaskLeft
+    sax .zpTL
+    and #cMaskRight
+    sta .zpTR
+    tya
+    and #cMaskBottom
+    lsr : lsr
+    ldx #cMaskRight  ;; gives BottomLeft at position TopRight
+    sax .zpBL
+    lsr : lsr : lsr : lsr
+    and #cMaskLeft
+    sta .zpBR
+
+    lda .zpTL
+    ora .zpTR
+    tax
+    lda .pBlurData, x
+    and #cMaskTop
+    sta .combineTop
+
+    lda .zpBL
+    ora .zpBR
+    tax
+    lda .pBlurData, x
+    and #cMaskBottom
+.combineTop = *+1
+    ora #0
+    tax
+    and #cMaskLeft
+    sta pBlurMaskLeft,y
+    txa
+    and #cMaskRight
+    sta pBlurMaskRight,y
+
+
+    lda .zpBL
+    ora .zpTL
+    tax
+    lda .pBlurData, x
+    and #cMaskLeft
+    sta .combineLeft
+
+    lda .zpBR
+    ora .zpTR
+    tax
+    lda .pBlurData, x
+    and #cMaskRight
+.combineLeft = *+1
+    ora #0
+    tax
+    and #cMaskTop
+    sta pBlurMaskTop,y
+    txa
+    and #cMaskBottom
+    sta pBlurMaskBottom,y
+
+    iny
+    bne .Continue
+    rts
+
+.pBlurData:
+    !byte %........, %........, %.#.#.#.#, %#.#.#.#.    ;; 0, 0, 1, 2
+    !byte %........, %.#.#.#.#, %.#.#.#.#, %#.#.#.#.    ;; 0, 1, 1, 2
+    !byte %.#.#.#.#, %.#.#.#.#, %#.#.#.#., %#.#.#.#.    ;; 1, 1, 2, 2
+    !byte %#.#.#.#., %#.#.#.#., %#.#.#.#., %########    ;; 2, 2, 2, 3
+
+!zone FIREBLUR_INIT_MoveTables
+
+.pSinDiffAmp64Len64Src:
+!byte  3, 3, 3, 3, 3, 3, 2, 3, 2, 2, 1, 2, 1, 0, 1, 0
+.pSinDiffAmp64Len64Dst = pSinDiffAmp64Len64
+.pSinDiffAmp32Len128Src:
+!byte  1,1,0,1,1,1,0,1,1,1,0,1,1,0,1,0, 1,0,1,0,1,0,0,1,0,0,1,0,0,0,0,0   
+.pSinDiffAmp32Len128Dst = pSinDiffAmp32Len128
+.pSinDiffAmp64Len128Src:
+!byte  2,1,2,1,2,1,2,1,2,1,1,2,1,1,1,2, 1,1,1,1,0,1,1,1,0,1,0,0,1,0,0,0   
+.pSinDiffAmp64Len128Dst = pSinDiffAmp64Len128
+
+UnpackMoveTables:
+.UnpackSinTable64:
+    ldx #15
+    ldy #0
+-   lda .pSinDiffAmp64Len64Src,x
+    sta .pSinDiffAmp64Len64Dst,x
+    sta .pSinDiffAmp64Len64Dst+64,x
+    sta .pSinDiffAmp64Len64Dst+128,x
+    sta .pSinDiffAmp64Len64Dst+192,x
+    sta .pSinDiffAmp64Len64Dst+48,y
+    sta .pSinDiffAmp64Len64Dst+64+48,y
+    sta .pSinDiffAmp64Len64Dst+128+48,y
+    sta .pSinDiffAmp64Len64Dst+192+48,y
+    eor #$FF
+    clc
+    adc #1
+    sta .pSinDiffAmp64Len64Dst+32,x
+    sta .pSinDiffAmp64Len64Dst+64+32,x
+    sta .pSinDiffAmp64Len64Dst+128+32,x
+    sta .pSinDiffAmp64Len64Dst+192+32,x
+    sta .pSinDiffAmp64Len64Dst+16,y
+    sta .pSinDiffAmp64Len64Dst+64+16,y
+    sta .pSinDiffAmp64Len64Dst+128+16,y
+    sta .pSinDiffAmp64Len64Dst+192+16,y
+    iny
+    dex
+    bpl -
+    
+    ldx #31
+    ldy #0
+-   lda .pSinDiffAmp32Len128Src,x
+    sta .pSinDiffAmp32Len128Dst,x
+    sta .pSinDiffAmp32Len128Dst+128,x
+    sta .pSinDiffAmp32Len128Dst+96,y
+    sta .pSinDiffAmp32Len128Dst+128+96,y
+    eor #$FF
+    clc
+    adc #1
+    sta .pSinDiffAmp32Len128Dst+64,x
+    sta .pSinDiffAmp32Len128Dst+128+64,x
+    sta .pSinDiffAmp32Len128Dst+32,y
+    sta .pSinDiffAmp32Len128Dst+128+32,y
+    iny
+    dex
+    bpl -    
+
+    ldx #31
+    ldy #0
+-   lda .pSinDiffAmp64Len128Src,x
+    sta .pSinDiffAmp64Len128Dst,x
+    sta .pSinDiffAmp64Len128Dst+128,x
+    sta .pSinDiffAmp64Len128Dst+96,y
+    sta .pSinDiffAmp64Len128Dst+128+96,y
+    eor #$FF
+    clc
+    adc #1
+    sta .pSinDiffAmp64Len128Dst+64,x
+    sta .pSinDiffAmp64Len128Dst+128+64,x
+    sta .pSinDiffAmp64Len128Dst+32,y
+    sta .pSinDiffAmp64Len128Dst+128+32,y
+    iny
+    dex
+    bpl -    
+    
+    rts
+
+MoveSpriteData:
+    ldx #0
+-
+!for .P, 0, ((cSpriteCount/4)-1){
+    lda .pSpritesLoadBase + (.P*256),x
+    sta pSpriteDataBasePtr + (.P*256),x
+}
+    inx
+    bne -
+    rts
+
+.pSpritesLoadBase:
+!bin "sprites_charset.bin"
